@@ -1,0 +1,125 @@
+{
+  "subsystems": [
+    {
+      "account": "22.1.1",
+      "name": "First Wall/Blanket",
+      "absolute_capital_cost": 500,
+      "absolute_fixed_om": 25,
+      "variable_om": 0,
+      "trl": 4,
+      "idiot_index": 8.5,
+      "description": "Plasma-facing components and breeding blanket. High neutron flux environment requires advanced materials."
+    },
+    {
+      "account": "22.1.2",
+      "name": "Neutron Shielding",
+      "absolute_capital_cost": 200,
+      "absolute_fixed_om": 5,
+      "variable_om": 0,
+      "trl": 5,
+      "idiot_index": 3.0,
+      "description": "Radiation shielding to protect external components and personnel. Not needed for aneutronic fuels."
+    },
+    {
+      "account": "22.1.3",
+      "name": "Magnets (MCF)",
+      "absolute_capital_cost": 800,
+      "absolute_fixed_om": 20,
+      "variable_om": 0,
+      "trl": 6,
+      "idiot_index": 12.0,
+      "description": "Superconducting magnets for magnetic confinement. Major cost driver with significant learning potential."
+    },
+    {
+      "account": "22.1.5",
+      "name": "Structural Support",
+      "absolute_capital_cost": 150,
+      "absolute_fixed_om": 3,
+      "variable_om": 0,
+      "trl": 7,
+      "idiot_index": 2.5,
+      "description": "Structural framework and support systems. Mature industrial technology."
+    },
+    {
+      "account": "22.1.6",
+      "name": "Vacuum Systems",
+      "absolute_capital_cost": 100,
+      "absolute_fixed_om": 5,
+      "variable_om": 0,
+      "trl": 7,
+      "idiot_index": 4.0,
+      "description": "Vacuum vessel and pumping systems for plasma containment."
+    },
+    {
+      "account": "22.1.7",
+      "name": "Power Supplies",
+      "absolute_capital_cost": 200,
+      "absolute_fixed_om": 8,
+      "variable_om": 0,
+      "trl": 7,
+      "idiot_index": 3.5,
+      "description": "Magnet power supplies, heating systems, and auxiliary power."
+    },
+    {
+      "account": "22.1.8",
+      "name": "Laser/Driver (ICF)",
+      "absolute_capital_cost": 1200,
+      "absolute_fixed_om": 40,
+      "variable_om": 0,
+      "trl": 5,
+      "idiot_index": 18.0,
+      "description": "High-power laser or particle beam driver for inertial confinement. Very high learning potential."
+    },
+    {
+      "account": "22.1.9",
+      "name": "Direct Energy Conversion",
+      "absolute_capital_cost": 300,
+      "absolute_fixed_om": 10,
+      "variable_om": 0,
+      "trl": 3,
+      "idiot_index": 15.0,
+      "description": "Direct conversion of charged particle energy to electricity. Required for aneutronic fuels."
+    },
+    {
+      "account": "22.5",
+      "name": "Tritium Handling",
+      "absolute_capital_cost": 250,
+      "absolute_fixed_om": 15,
+      "variable_om": 0,
+      "trl": 5,
+      "idiot_index": 10.0,
+      "description": "Tritium breeding, extraction, storage, and injection systems. Required for D-T fuel."
+    },
+    {
+      "account": "22.6",
+      "name": "He3 Production",
+      "absolute_capital_cost": 400,
+      "absolute_fixed_om": 20,
+      "variable_om": 0,
+      "trl": 4,
+      "idiot_index": 12.0,
+      "description": "Helium-3 production or supply infrastructure. Required for D-He3 fuel. Could include lunar mining or breeding from deuterium."
+    },
+    {
+      "account": "23",
+      "name": "Turbine Plant",
+      "absolute_capital_cost": 400,
+      "absolute_fixed_om": 12,
+      "variable_om": 0.5,
+      "trl": 9,
+      "idiot_index": 2.0,
+      "description": "Steam turbine and generator for thermal-to-electric conversion. Mature technology."
+    },
+    {
+      "account": "24-26",
+      "name": "Balance of Plant",
+      "absolute_capital_cost": 350,
+      "absolute_fixed_om": 10,
+      "variable_om": 0.3,
+      "trl": 9,
+      "idiot_index": 1.5,
+      "description": "Cooling systems, electrical systems, buildings, and site infrastructure."
+    }
+  ],
+  "reference_capacity_mw": 1000
+}
