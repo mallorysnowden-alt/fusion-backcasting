@@ -125,7 +125,14 @@ export function SubsystemCard({ subsystem }: SubsystemCardProps) {
       <div className="space-y-4">
         <div>
           <div className="flex items-center justify-between text-sm mb-1">
-            <span className="text-gray-600 dark:text-gray-400">Capital Cost</span>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-600 dark:text-gray-400">Capital Cost</span>
+              <LockToggle
+                locked={subsystem.lockedCapex}
+                onToggle={() => updateSubsystem(subsystem.account, { lockedCapex: !subsystem.lockedCapex })}
+                title="Lock capital cost (won't change when applying learning curve)"
+              />
+            </div>
             <div className="text-right">
               <span className="font-semibold dark:text-gray-200">${subsystem.absoluteCapitalCost}M</span>
               <span className="text-gray-400 text-xs ml-2">(${Math.round(capPerKw)}/kW)</span>
@@ -133,12 +140,13 @@ export function SubsystemCard({ subsystem }: SubsystemCardProps) {
           </div>
           <SliderWithDefault
             min={0}
-            max={Math.max(2000, subsystem.absoluteCapitalCost * 2, subsystem.baselineCapitalCost * 1.5)}
+            max={Math.min(5000, Math.max(2000, subsystem.baselineCapitalCost * 2))}
             step={10}
             value={subsystem.absoluteCapitalCost}
             defaultValue={subsystem.baselineCapitalCost}
             formatDefault={(v) => `$${v}M`}
             onChange={(v) => updateSubsystem(subsystem.account, { absoluteCapitalCost: v })}
+            locked={subsystem.lockedCapex}
           />
         </div>
 
@@ -146,6 +154,11 @@ export function SubsystemCard({ subsystem }: SubsystemCardProps) {
           <div className="flex items-center justify-between text-sm mb-1">
             <div className="flex items-center gap-2">
               <span className="text-gray-600 dark:text-gray-400">Fixed O&M</span>
+              <LockToggle
+                locked={subsystem.lockedOm}
+                onToggle={() => updateSubsystem(subsystem.account, { lockedOm: !subsystem.lockedOm })}
+                title="Lock O&M (won't change when applying learning curve)"
+              />
               <span className="text-xs px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 rounded" title="O&M as % of Capital Cost">
                 {omPctOfCapital.toFixed(1)}% of CapEx
               </span>
@@ -157,12 +170,13 @@ export function SubsystemCard({ subsystem }: SubsystemCardProps) {
           </div>
           <SliderWithDefault
             min={0}
-            max={Math.max(100, subsystem.absoluteFixedOm * 2, subsystem.baselineFixedOm * 1.5)}
+            max={Math.min(500, Math.max(100, subsystem.baselineFixedOm * 2))}
             step={1}
             value={subsystem.absoluteFixedOm}
             defaultValue={subsystem.baselineFixedOm}
             formatDefault={(v) => `$${v}M`}
             onChange={(v) => updateSubsystem(subsystem.account, { absoluteFixedOm: v })}
+            locked={subsystem.lockedOm}
           />
         </div>
 
@@ -196,6 +210,39 @@ export function SubsystemCard({ subsystem }: SubsystemCardProps) {
   );
 }
 
+// Lock toggle button for fixing values during Apply Learning Curve
+function LockToggle({
+  locked,
+  onToggle,
+  title,
+}: {
+  locked: boolean;
+  onToggle: () => void;
+  title: string;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      className={`p-0.5 rounded transition-colors ${
+        locked
+          ? 'text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300'
+          : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400'
+      }`}
+      title={title}
+    >
+      {locked ? (
+        <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+        </svg>
+      ) : (
+        <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+          <path d="M10 2a5 5 0 00-5 5v2a2 2 0 00-2 2v5a2 2 0 002 2h10a2 2 0 002-2v-5a2 2 0 00-2-2H7V7a3 3 0 015.905-.75 1 1 0 001.937-.5A5.002 5.002 0 0010 2z" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 // Slider with visual indicator for default value
 function SliderWithDefault({
   min,
@@ -205,6 +252,7 @@ function SliderWithDefault({
   defaultValue,
   formatDefault,
   onChange,
+  locked = false,
 }: {
   min: number;
   max: number;
@@ -213,9 +261,10 @@ function SliderWithDefault({
   defaultValue: number;
   formatDefault: (v: number) => string;
   onChange: (v: number) => void;
+  locked?: boolean;
 }) {
   // Calculate position percentage for the default marker
-  // Adjust for thumb width (~16px) - track is inset by 8px on each side
+  // Adjust for thumb width (~14px) - track is inset by 7px on each side
   const defaultPct = ((defaultValue - min) / (max - min)) * 100;
   const isAtDefault = Math.abs(value - defaultValue) < step;
 
@@ -228,7 +277,7 @@ function SliderWithDefault({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full"
+        className={`w-full ${locked ? 'accent-amber-500' : ''}`}
       />
       {/* Default value marker - adjusted for thumb width (~14px) */}
       <div

@@ -34,6 +34,8 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     learningRate: 0.80,
     required: false,
     disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
     description: 'Plasma-facing components and breeding blanket. High neutron flux environment requires advanced materials.',
   },
   {
@@ -49,6 +51,8 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     learningRate: 0.85,
     required: false,
     disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
     description: 'Radiation shielding to protect external components and personnel. Not needed for aneutronic fuels.',
   },
   {
@@ -64,6 +68,8 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     learningRate: 0.85,
     required: false,
     disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
     description: 'Superconducting magnets for magnetic confinement. Major cost driver with significant learning potential.',
   },
   {
@@ -79,6 +85,8 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     learningRate: 0.92,
     required: false,
     disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
     description: 'Structural framework and support systems. Mature industrial technology.',
   },
   {
@@ -94,6 +102,8 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     learningRate: 0.88,
     required: false,
     disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
     description: 'Vacuum vessel and pumping systems for plasma containment.',
   },
   {
@@ -109,6 +119,8 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     learningRate: 0.88,
     required: false,
     disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
     description: 'Magnet power supplies, heating systems, and auxiliary power.',
   },
   {
@@ -124,6 +136,8 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     learningRate: 0.82,
     required: false,
     disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
     description: 'High-power laser or particle beam driver for inertial confinement. Very high learning potential.',
   },
   {
@@ -139,6 +153,8 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     learningRate: 0.78,
     required: false,
     disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
     description: 'Direct conversion of charged particle energy to electricity. Required for aneutronic fuels.',
   },
   {
@@ -154,6 +170,8 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     learningRate: 0.85,
     required: false,
     disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
     description: 'Tritium breeding, extraction, storage, and injection systems. Required for D-T fuel.',
   },
   {
@@ -169,6 +187,8 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     learningRate: 0.80,
     required: false,
     disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
     description: 'Helium-3 production or supply infrastructure. Required for D-He3 fuel.',
   },
   {
@@ -184,6 +204,8 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     learningRate: 0.96,
     required: false,
     disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
     description: 'Steam turbine and generator for thermal-to-electric conversion. Mature technology.',
   },
   {
@@ -199,6 +221,8 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     learningRate: 0.95,
     required: false,
     disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
     description: 'Cooling systems, electrical systems, buildings, and site infrastructure.',
   },
 ];

@@ -16,6 +16,8 @@ export interface Subsystem {
   learningRate: number;         // Learning curve rate (e.g., 0.85 = 15% cost reduction per doubling)
   required: boolean;
   disabled: boolean;
+  lockedCapex: boolean;         // If true, "Apply Learning Curve" won't modify capital cost
+  lockedOm: boolean;            // If true, "Apply Learning Curve" won't modify O&M
   description?: string;
 }
 
@@ -479,6 +481,7 @@ export function getLearningPotential(idiotIndex: number): string {
  * Solve for target LCOE by adjusting subsystem costs.
  * Prioritizes reducing costs on subsystems with highest idiot index (most learning potential).
  * Reduces both capital AND O&M proportionally (O&M scales with capital via learning curve).
+ * Respects locked subsystem values - won't modify capex/om if locked.
  * Returns updated subsystems with new costs.
  */
 export function solveAndApplyTarget(
@@ -519,31 +522,52 @@ export function solveAndApplyTarget(
     };
   }
 
-  // We need to find a uniform scale factor 'r' such that:
-  // (crf * capex * r * regulatory + om * r) / energy + variable_om = target_lcoe
-  // r * (crf * capex * regulatory + om) = (target_lcoe - variable_om) * energy
-  // r = (target_lcoe - variable_om) * energy / (crf * capex * regulatory + om)
-
-  const numerator = (targetLcoe - totalVariableOm) * energyPerKw;
-  const denominator = crf * currentCapexPerKw + currentOmPerKw;
-
-  if (denominator <= 0) {
+  // Check if there's anything to adjust
+  const hasAdjustable = activeSubsystems.some(s => !s.lockedCapex || !s.lockedOm);
+  if (!hasAdjustable) {
     return {
       subsystems,
       success: false,
-      message: `Invalid configuration: no capital or O&M costs to reduce`,
+      message: `All subsystems are locked. Unlock some to apply learning curve.`,
     };
   }
 
-  const uniformScaleFactor = numerator / denominator;
+  // Get adjustable subsystems for weighted reduction
+  const adjustableSubsystems = activeSubsystems.filter(s => !s.lockedCapex || !s.lockedOm);
 
-  if (uniformScaleFactor <= 0) {
+  // Calculate locked contribution to LCOE
+  const lockedCapexPerKw = activeSubsystems
+    .filter(s => s.lockedCapex)
+    .reduce((sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0)
+    * constraints.regulatoryModifier;
+  const lockedOmPerKw = activeSubsystems
+    .filter(s => s.lockedOm)
+    .reduce((sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0);
+  const lockedLcoeContrib = (crf * lockedCapexPerKw + lockedOmPerKw) / energyPerKw;
+
+  // Target LCOE that adjustable costs must achieve
+  const adjustableTargetLcoe = targetLcoe - totalVariableOm - lockedLcoeContrib;
+
+  if (adjustableTargetLcoe <= 0) {
     return {
       subsystems,
       success: false,
-      message: `Impossible: Variable O&M ($${totalVariableOm.toFixed(2)}/MWh) exceeds target LCOE of $${targetLcoe}/MWh`,
+      message: `Impossible: Locked costs + variable O&M ($${(lockedLcoeContrib + totalVariableOm).toFixed(2)}/MWh) exceed target LCOE of $${targetLcoe}/MWh. Unlock some subsystems.`,
     };
   }
+
+  // Current adjustable LCOE
+  const adjustableCapexPerKw = activeSubsystems
+    .filter(s => !s.lockedCapex)
+    .reduce((sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0)
+    * constraints.regulatoryModifier;
+  const adjustableOmPerKw = activeSubsystems
+    .filter(s => !s.lockedOm)
+    .reduce((sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0);
+  const currentAdjustableLcoe = (crf * adjustableCapexPerKw + adjustableOmPerKw) / energyPerKw;
+
+  // Scale factor needed for adjustable costs
+  const uniformScaleFactor = adjustableTargetLcoe / currentAdjustableLcoe;
 
   if (uniformScaleFactor >= 1) {
     return {
@@ -556,36 +580,35 @@ export function solveAndApplyTarget(
   // Minimum scale factor (can't reduce below 10% of baseline)
   const minScaleFactor = 0.10;
 
-  // Instead of uniform scaling, weight by idiot index
-  // Higher II subsystems get more reduction, lower II get less
-  // We'll use weighted scaling: r_i = base_r * (II_i / avg_II)
-  // But ensure we hit the target overall
+  // Calculate average idiot index for adjustable subsystems
+  const totalWeight = adjustableSubsystems.reduce((sum, s) => sum + calculateIdiotIndex(s), 0);
+  const avgWeight = totalWeight / Math.max(1, adjustableSubsystems.length);
 
-  const totalWeight = activeSubsystems.reduce((sum, s) => sum + calculateIdiotIndex(s), 0);
-  const avgWeight = totalWeight / activeSubsystems.length;
-
-  // Calculate how much total cost reduction we need (capex + om combined)
+  // Calculate how much total cost reduction we need
   const totalReductionNeeded = (1 - uniformScaleFactor);
 
-  // Apply weighted reductions
+  // Apply weighted reductions only to unlocked values
   const updatedSubsystems = subsystems.map(sub => {
     if (sub.disabled) return sub;
+
+    // Skip if both are locked
+    if (sub.lockedCapex && sub.lockedOm) return sub;
 
     const idiotIndex = calculateIdiotIndex(sub);
     // Weight factor: subsystems with higher II get reduced more
     const weightFactor = idiotIndex / avgWeight;
 
     // Calculate this subsystem's reduction factor
-    // Higher weight = more reduction (lower scale factor)
     let scaleFactor = 1 - (totalReductionNeeded * weightFactor);
-
-    // Clamp to minimum
     scaleFactor = Math.max(minScaleFactor, Math.min(1.0, scaleFactor));
 
-    // Use floor to ensure we don't round up and overshoot the target
-    const newCapitalCost = Math.floor(sub.absoluteCapitalCost * scaleFactor);
-    // O&M scales proportionally with capital (maintains O&M % of capital)
-    const newFixedOm = Math.floor(sub.absoluteFixedOm * scaleFactor);
+    // Only reduce unlocked values
+    const newCapitalCost = sub.lockedCapex
+      ? sub.absoluteCapitalCost
+      : Math.floor(sub.absoluteCapitalCost * scaleFactor);
+    const newFixedOm = sub.lockedOm
+      ? sub.absoluteFixedOm
+      : Math.floor(sub.absoluteFixedOm * scaleFactor);
 
     return {
       ...sub,
@@ -604,26 +627,30 @@ export function solveAndApplyTarget(
   );
   let newLcoe = (crf * newCapexPerKw + newOmPerKw) / energyPerKw + totalVariableOm;
 
-  // If we're still above target, do uniform additional reduction on adjustable subsystems
-  // Use tight tolerance - we want to be AT or BELOW target, not just close
+  // If we're still above target, do uniform additional reduction on adjustable (unlocked) subsystems
   let iterations = 0;
   while (newLcoe > targetLcoe && iterations < 20) {
     const adjustable = updatedSubsystems.filter(s =>
       !s.disabled &&
-      s.absoluteCapitalCost > s.baselineCapitalCost * minScaleFactor
+      (!s.lockedCapex || !s.lockedOm) &&
+      ((!s.lockedCapex && s.absoluteCapitalCost > s.baselineCapitalCost * minScaleFactor) ||
+       (!s.lockedOm && s.absoluteFixedOm > s.baselineFixedOm * minScaleFactor))
     );
 
     if (adjustable.length === 0) break;
 
-    // Calculate additional reduction needed - overshoot slightly to account for rounding
+    // Calculate additional reduction needed
     const gapRatio = (targetLcoe - 0.005) / newLcoe;
 
     adjustable.forEach(sub => {
-      const minCap = Math.floor(sub.baselineCapitalCost * minScaleFactor);
-      const minOm = Math.floor(sub.baselineFixedOm * minScaleFactor);
-      // Use floor to ensure we reduce enough
-      sub.absoluteCapitalCost = Math.max(minCap, Math.floor(sub.absoluteCapitalCost * gapRatio));
-      sub.absoluteFixedOm = Math.max(minOm, Math.floor(sub.absoluteFixedOm * gapRatio));
+      if (!sub.lockedCapex) {
+        const minCap = Math.floor(sub.baselineCapitalCost * minScaleFactor);
+        sub.absoluteCapitalCost = Math.max(minCap, Math.floor(sub.absoluteCapitalCost * gapRatio));
+      }
+      if (!sub.lockedOm) {
+        const minOm = Math.floor(sub.baselineFixedOm * minScaleFactor);
+        sub.absoluteFixedOm = Math.max(minOm, Math.floor(sub.absoluteFixedOm * gapRatio));
+      }
     });
 
     activeUpdated = updatedSubsystems.filter(s => !s.disabled);
@@ -642,18 +669,22 @@ export function solveAndApplyTarget(
   const capexReduction = currentCapexAbs - finalCapexAbs;
   const omReduction = currentOmAbs - finalOmAbs;
 
+  // Count locked subsystems for message
+  const lockedCount = activeSubsystems.filter(s => s.lockedCapex || s.lockedOm).length;
+  const lockedNote = lockedCount > 0 ? ` (${lockedCount} subsystem(s) locked)` : '';
+
   if (newLcoe > targetLcoe + 0.5) {
     return {
       subsystems: updatedSubsystems,
       success: false,
-      message: `Partial reduction: LCOE reduced to $${newLcoe.toFixed(2)}/MWh (target: $${targetLcoe}/MWh). CapEx -$${Math.round(capexReduction)}M, O&M -$${Math.round(omReduction)}M/yr. Further reduction requires parameter changes.`,
+      message: `Partial reduction: LCOE reduced to $${newLcoe.toFixed(2)}/MWh (target: $${targetLcoe}/MWh)${lockedNote}. CapEx -$${Math.round(capexReduction)}M, O&M -$${Math.round(omReduction)}M/yr. Try unlocking more subsystems.`,
     };
   }
 
   return {
     subsystems: updatedSubsystems,
     success: true,
-    message: `Hit target! CapEx -$${Math.round(capexReduction)}M (to $${Math.round(finalCapexAbs)}M), O&M -$${Math.round(omReduction)}M/yr (to $${Math.round(finalOmAbs)}M/yr). LCOE: $${newLcoe.toFixed(2)}/MWh`,
+    message: `Hit target!${lockedNote} CapEx -$${Math.round(capexReduction)}M (to $${Math.round(finalCapexAbs)}M), O&M -$${Math.round(omReduction)}M/yr (to $${Math.round(finalOmAbs)}M/yr). LCOE: $${newLcoe.toFixed(2)}/MWh`,
   };
 }
 
