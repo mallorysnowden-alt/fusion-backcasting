@@ -131,14 +131,14 @@ export function SubsystemCard({ subsystem }: SubsystemCardProps) {
               <span className="text-gray-400 text-xs ml-2">(${Math.round(capPerKw)}/kW)</span>
             </div>
           </div>
-          <input
-            type="range"
+          <SliderWithDefault
             min={0}
-            max={Math.max(2000, subsystem.absoluteCapitalCost * 2)}
+            max={Math.max(2000, subsystem.absoluteCapitalCost * 2, subsystem.baselineCapitalCost * 1.5)}
             step={10}
             value={subsystem.absoluteCapitalCost}
-            onChange={(e) => updateSubsystem(subsystem.account, { absoluteCapitalCost: Number(e.target.value) })}
-            className="w-full"
+            defaultValue={subsystem.baselineCapitalCost}
+            formatDefault={(v) => `$${v}M`}
+            onChange={(v) => updateSubsystem(subsystem.account, { absoluteCapitalCost: v })}
           />
         </div>
 
@@ -155,14 +155,14 @@ export function SubsystemCard({ subsystem }: SubsystemCardProps) {
               <span className="text-gray-400 text-xs ml-2">(${Math.round(omPerKw)}/kW-yr)</span>
             </div>
           </div>
-          <input
-            type="range"
+          <SliderWithDefault
             min={0}
-            max={Math.max(100, subsystem.absoluteFixedOm * 2)}
+            max={Math.max(100, subsystem.absoluteFixedOm * 2, subsystem.baselineFixedOm * 1.5)}
             step={1}
             value={subsystem.absoluteFixedOm}
-            onChange={(e) => updateSubsystem(subsystem.account, { absoluteFixedOm: Number(e.target.value) })}
-            className="w-full"
+            defaultValue={subsystem.baselineFixedOm}
+            formatDefault={(v) => `$${v}M`}
+            onChange={(v) => updateSubsystem(subsystem.account, { absoluteFixedOm: v })}
           />
         </div>
 
@@ -191,6 +191,59 @@ export function SubsystemCard({ subsystem }: SubsystemCardProps) {
 
       {subsystem.description && (
         <p className="text-xs text-gray-500 dark:text-gray-400 mt-3 leading-relaxed">{subsystem.description}</p>
+      )}
+    </div>
+  );
+}
+
+// Slider with visual indicator for default value
+function SliderWithDefault({
+  min,
+  max,
+  step,
+  value,
+  defaultValue,
+  formatDefault,
+  onChange,
+}: {
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  defaultValue: number;
+  formatDefault: (v: number) => string;
+  onChange: (v: number) => void;
+}) {
+  // Calculate position percentage for the default marker
+  const defaultPct = ((defaultValue - min) / (max - min)) * 100;
+  const isAtDefault = Math.abs(value - defaultValue) < step;
+
+  return (
+    <div className="relative">
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full"
+      />
+      {/* Default value marker */}
+      <div
+        className="absolute top-0 h-4 flex flex-col items-center pointer-events-none"
+        style={{ left: `calc(${defaultPct}% - 1px)` }}
+      >
+        <div className={`w-0.5 h-4 ${isAtDefault ? 'bg-fusion-500' : 'bg-gray-400 dark:bg-gray-500'}`} />
+      </div>
+      {/* Default label below slider */}
+      {!isAtDefault && (
+        <div
+          className="absolute top-5 text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap pointer-events-none transform -translate-x-1/2"
+          style={{ left: `${defaultPct}%` }}
+        >
+          ↑ {formatDefault(defaultValue)}
+        </div>
       )}
     </div>
   );
