@@ -215,6 +215,7 @@ function SliderWithDefault({
   onChange: (v: number) => void;
 }) {
   // Calculate position percentage for the default marker
+  // Adjust for thumb width (~16px) - track is inset by 8px on each side
   const defaultPct = ((defaultValue - min) / (max - min)) * 100;
   const isAtDefault = Math.abs(value - defaultValue) < step;
 
@@ -229,10 +230,10 @@ function SliderWithDefault({
         onChange={(e) => onChange(Number(e.target.value))}
         className="w-full"
       />
-      {/* Default value marker */}
+      {/* Default value marker - adjusted for thumb width (~14px) */}
       <div
         className="absolute top-0 h-4 flex flex-col items-center pointer-events-none"
-        style={{ left: `calc(${defaultPct}% - 1px)` }}
+        style={{ left: `calc(${defaultPct}% + ${7 - defaultPct * 0.14}px)` }}
       >
         <div className={`w-0.5 h-4 ${isAtDefault ? 'bg-fusion-500' : 'bg-gray-400 dark:bg-gray-500'}`} />
       </div>
@@ -240,7 +241,7 @@ function SliderWithDefault({
       {!isAtDefault && (
         <div
           className="absolute top-5 text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap pointer-events-none transform -translate-x-1/2"
-          style={{ left: `${defaultPct}%` }}
+          style={{ left: `calc(${defaultPct}% + ${7 - defaultPct * 0.14}px)` }}
         >
           ↑ {formatDefault(defaultValue)}
         </div>
