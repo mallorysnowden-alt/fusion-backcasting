@@ -440,12 +440,14 @@ export const useFusionStore = create<FusionStore>((set, get) => {
 
           // Compute required learning rate: LR = costRatio^(1/doublings)
           unclampedLR = Math.pow(targetCostRatio, 1 / doublings);
-          // Clamp to TRL minimum floor (can't be more aggressive than plausible)
-          requiredLR = Math.max(plausibleRange.min, Math.min(1, unclampedLR));
+          requiredLR = Math.min(1, unclampedLR);
 
-          // Compute actual costs with this learning rate
-          targetCapex = effectiveBaselineCapex * Math.pow(requiredLR, doublings);
-          targetOm = effectiveBaselineOm * Math.pow(requiredLR, doublings);
+          // Clamp for cost calculation (can't be more aggressive than TRL min)
+          const clampedLR = Math.max(plausibleRange.min, requiredLR);
+
+          // Compute actual costs with CLAMPED learning rate
+          targetCapex = effectiveBaselineCapex * Math.pow(clampedLR, doublings);
+          targetOm = effectiveBaselineOm * Math.pow(clampedLR, doublings);
         } else if (doublings <= 0) {
           // N=1: no learning possible, costs stay at baseline
           requiredLR = 1.0;
@@ -453,12 +455,12 @@ export const useFusionStore = create<FusionStore>((set, get) => {
           targetOm = effectiveBaselineOm;
         }
 
-        // Flag only if unclamped LR would be BELOW the floor (forced to clamp)
-        const lrOutOfRange = unclampedLR < plausibleRange.min;
+        // Flag if required LR is more than 1 point below the TRL minimum
+        const lrOutOfRange = requiredLR < (plausibleRange.min - 0.01);
 
         return {
           ...sub,
-          learningRate: requiredLR,
+          learningRate: requiredLR,  // Display the UNCLAMPED/required LR
           absoluteCapitalCost: Math.round(targetCapex),
           absoluteFixedOm: Math.round(targetOm),
           lrOutOfRange,
@@ -483,7 +485,7 @@ export const useFusionStore = create<FusionStore>((set, get) => {
         const effectiveBaselineCapex = sub.baselineCapitalCost * multiplier;
         const effectiveBaselineOm = sub.baselineFixedOm * multiplier;
 
-        // Use most aggressive plausible LR (TRL min)
+        // Use most aggressive plausible LR (TRL min - no buffer for min achievable calc)
         const plausibleRange = getPlausibleLRRange(sub.trl);
         const mostAggressiveLR = plausibleRange.min;
 
@@ -499,13 +501,16 @@ export const useFusionStore = create<FusionStore>((set, get) => {
       });
 
       const minLcoeBreakdown = calculateLCOE(minCostSubsystems, financialParams, fuelType, confinementType);
-      const minimumAttainableLcoe = minLcoeBreakdown.totalLcoe;
+      const theoreticalMinLcoe = minLcoeBreakdown.totalLcoe;
 
       // Check if any subsystem has an out-of-range learning rate
       const hasAnyOutOfRangeLR = subsystemsWithLR.some(s => !s.disabled && s.lrOutOfRange);
 
+      // Min achievable LCOE is always calculated with all LRs at their TRL minimums
+      const minimumAttainableLcoe = theoreticalMinLcoe;
+
       // Target is attainable if it's >= minimum achievable AND no subsystem has unrealistic LR
-      const isTargetAttainable = targetLcoe >= minimumAttainableLcoe * 0.99 && !hasAnyOutOfRangeLR;
+      const isTargetAttainable = targetLcoe >= theoreticalMinLcoe * 0.99 && !hasAnyOutOfRangeLR;
 
       set({ subsystems: subsystemsWithLR, lcoeBreakdown, feasibility, totalCapexAbs, totalCapexPerKw, isTargetAttainable, minimumAttainableLcoe });
     },

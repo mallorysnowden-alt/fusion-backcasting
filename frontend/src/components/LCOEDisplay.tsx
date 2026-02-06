@@ -25,7 +25,7 @@ export function LCOEDisplay() {
         {!isTargetAttainable && (
           <div className="mt-4 p-3 bg-red-100 dark:bg-red-900/50 rounded-lg">
             <div className="text-sm text-red-600 dark:text-red-400">
-              Target unattainable. Minimum achievable:
+              Minimum achievable:
             </div>
             <div className="text-2xl font-bold text-red-700 dark:text-red-300">
               ${minimumAttainableLcoe.toFixed(2)}/MWh
