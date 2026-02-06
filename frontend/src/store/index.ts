@@ -467,8 +467,6 @@ export const useFusionStore = create<FusionStore>((set, get) => {
         };
       });
 
-      const lcoeBreakdown = calculateLCOE(subsystemsWithLR, financialParams, fuelType, confinementType);
-      const feasibility = getFeasibilityStatus(lcoeBreakdown.totalLcoe, targetLcoe);
       const totalCapexAbs = subsystemsWithLR
         .filter(s => !s.disabled)
         .reduce((sum, s) => sum + s.absoluteCapitalCost, 0);
@@ -503,16 +501,35 @@ export const useFusionStore = create<FusionStore>((set, get) => {
       const minLcoeBreakdown = calculateLCOE(minCostSubsystems, financialParams, fuelType, confinementType);
       const theoreticalMinLcoe = minLcoeBreakdown.totalLcoe;
 
-      // Check if any subsystem has an out-of-range learning rate
-      const hasAnyOutOfRangeLR = subsystemsWithLR.some(s => !s.disabled && s.lrOutOfRange);
+      // KEY FIX: Target is attainable if and only if target >= theoretical minimum
+      // (i.e., can we reach target with all LRs at their TRL minimums?)
+      const isTargetAttainable = targetLcoe >= theoreticalMinLcoe * 0.99;
 
-      // Min achievable LCOE is always calculated with all LRs at their TRL minimums
+      // If target is attainable, NO subsystem should be flagged red
+      // (the II-weighted distribution might suggest violations, but they're not necessary)
+      // If target is NOT attainable, flag subsystems whose required LR is below threshold
+      const finalSubsystems = subsystemsWithLR.map(sub => ({
+        ...sub,
+        lrOutOfRange: isTargetAttainable ? false : sub.lrOutOfRange,
+      }));
+
+      // Min achievable LCOE = LCOE with all LRs at their TRL minimums
+      // Only relevant when target is NOT attainable (will be > target in that case)
       const minimumAttainableLcoe = theoreticalMinLcoe;
 
-      // Target is attainable if it's >= minimum achievable AND no subsystem has unrealistic LR
-      const isTargetAttainable = targetLcoe >= theoreticalMinLcoe * 0.99 && !hasAnyOutOfRangeLR;
+      // Recalculate lcoeBreakdown with final subsystems (flags updated)
+      const finalLcoeBreakdown = calculateLCOE(finalSubsystems, financialParams, fuelType, confinementType);
+      const finalFeasibility = getFeasibilityStatus(finalLcoeBreakdown.totalLcoe, targetLcoe);
 
-      set({ subsystems: subsystemsWithLR, lcoeBreakdown, feasibility, totalCapexAbs, totalCapexPerKw, isTargetAttainable, minimumAttainableLcoe });
+      set({
+        subsystems: finalSubsystems,
+        lcoeBreakdown: finalLcoeBreakdown,
+        feasibility: finalFeasibility,
+        totalCapexAbs,
+        totalCapexPerKw,
+        isTargetAttainable,
+        minimumAttainableLcoe
+      });
     },
   };
 });
