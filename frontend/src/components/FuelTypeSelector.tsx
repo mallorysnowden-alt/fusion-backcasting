@@ -1,5 +1,5 @@
 import { useFusionStore } from '../store';
-import { FuelType, FUEL_CONSTRAINTS } from '../utils/calculations';
+import { FuelType, FUEL_INFO } from '../utils/calculations';
 
 export function FuelTypeSelector() {
   const { fuelType, setFuelType } = useFusionStore();
@@ -22,7 +22,7 @@ export function FuelTypeSelector() {
     },
   ];
 
-  const constraints = FUEL_CONSTRAINTS[fuelType];
+  const fuelInfo = FUEL_INFO[fuelType];
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border dark:border-gray-700 p-4">
@@ -46,19 +46,19 @@ export function FuelTypeSelector() {
       </div>
 
       <div className="text-sm text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
-        <p className="mb-2">{constraints.description}</p>
+        <p className="mb-2">{fuelInfo.description}</p>
         <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
           <div>
             <span className="font-medium">CF Modifier:</span>{' '}
-            <span className={constraints.cfModifier < 1 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}>
-              {constraints.cfModifier < 1 ? '' : '+'}
-              {((constraints.cfModifier - 1) * 100).toFixed(0)}%
+            <span className={fuelInfo.cfModifier < 1 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}>
+              {fuelInfo.cfModifier < 1 ? '' : '+'}
+              {((fuelInfo.cfModifier - 1) * 100).toFixed(0)}%
             </span>
           </div>
           <div>
             <span className="font-medium">Regulatory:</span>{' '}
-            <span className={constraints.regulatoryModifier > 1 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}>
-              +{((constraints.regulatoryModifier - 1) * 100).toFixed(0)}%
+            <span className={fuelInfo.regulatoryModifier > 1 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}>
+              +{((fuelInfo.regulatoryModifier - 1) * 100).toFixed(0)}%
             </span>
           </div>
         </div>

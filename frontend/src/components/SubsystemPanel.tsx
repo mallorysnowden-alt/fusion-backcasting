@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useFusionStore } from '../store';
 import { SubsystemCard } from './SubsystemCard';
-import { CapitalBreakdownChart } from './CapitalBreakdownChart';
 
 export function SubsystemPanel() {
   const { subsystems, resetToDefaults, totalCapexAbs, totalCapexPerKw } = useFusionStore();
@@ -37,9 +36,6 @@ export function SubsystemPanel() {
 
   return (
     <div>
-      {/* Capital Breakdown Chart */}
-      <CapitalBreakdownChart />
-
       {/* Subsystem Cards */}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border dark:border-gray-700">
         <div className="p-4 border-b dark:border-gray-700">

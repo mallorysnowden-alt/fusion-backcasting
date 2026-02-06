@@ -6,19 +6,25 @@
 export interface Subsystem {
   account: string;
   name: string;
-  absoluteCapitalCost: number;  // $M
-  absoluteFixedOm: number;      // $M/yr
-  variableOm: number;           // $/MWh
-  trl: number;
+  // Baseline costs (first unit / FOAK)
+  baselineCapitalCost: number;  // $M - First unit capital cost (user-adjustable)
+  baselineFixedOm: number;      // $M/yr - First unit O&M (user-adjustable)
   baselineIdiotIndex: number;   // Original idiot index at baseline cost
-  baselineCapitalCost: number;  // Original capital cost for idiot index calculation
-  baselineFixedOm: number;      // Original fixed O&M for proportional reduction
+  // Computed costs after learning (Nth unit / NOAK)
+  absoluteCapitalCost: number;  // $M - Computed from baseline × LR^(log2(N))
+  absoluteFixedOm: number;      // $M/yr - Computed from baseline × LR^(log2(N))
+  variableOm: number;           // $/MWh - Not affected by learning
+  // Learning parameters
   learningRate: number;         // Learning curve rate (e.g., 0.85 = 15% cost reduction per doubling)
+  trl: number;                  // Technology Readiness Level (affects plausible LR range)
+  // State flags
   required: boolean;
   disabled: boolean;
-  lockedCapex: boolean;         // If true, "Apply Learning Curve" won't modify capital cost
-  lockedOm: boolean;            // If true, "Apply Learning Curve" won't modify O&M
+  lockedCapex: boolean;         // If true, solver won't modify learning rate
+  lockedOm: boolean;            // If true, solver won't modify O&M learning
   description?: string;
+  // Validation
+  lrOutOfRange?: boolean;       // True if learning rate is below TRL-based minimum
 }
 
 /**
@@ -108,67 +114,268 @@ export function getLearningRateDescription(learningRate: number): string {
   return 'Very fast (high-tech)';
 }
 
+/**
+ * TRL to plausible learning rate range mapping
+ * Based on historical data for technologies at different maturity levels
+ */
+export function getPlausibleLRRange(trl: number): { min: number; max: number } {
+  if (trl <= 4) {
+    // TRL 3-4: Very fast learning (high-tech, early development)
+    return { min: 0.78, max: 0.80 };
+  } else if (trl <= 6) {
+    // TRL 5-6: Moderate learning (industrial scale-up)
+    return { min: 0.83, max: 0.87 };
+  } else if (trl <= 8) {
+    // TRL 7-8: Slow learning (mature technology)
+    return { min: 0.88, max: 0.92 };
+  } else {
+    // TRL 9: Very slow learning (commodity)
+    return { min: 0.95, max: 0.96 };
+  }
+}
+
+/**
+ * Get learning rate slider bounds based on TRL and Idiot Index
+ * Lower TRL and higher II allow for more aggressive (lower) learning rates
+ *
+ * @param trl Technology Readiness Level (1-9)
+ * @param idiotIndex Ratio of cost to raw materials (higher = more learning potential)
+ * @returns Slider bounds { min, max, default }
+ */
+export function getLearningRateBounds(trl: number, idiotIndex: number): { min: number; max: number; default: number } {
+  // Base range from TRL
+  const trlRange = getPlausibleLRRange(trl);
+
+  // Idiot Index adjustment: higher II allows more aggressive learning
+  // II > 10: can go 5% lower than TRL minimum
+  // II > 5: can go 2% lower
+  // II <= 2: constrained to TRL range
+  let minAdjustment = 0;
+  if (idiotIndex > 10) {
+    minAdjustment = 0.05;
+  } else if (idiotIndex > 5) {
+    minAdjustment = 0.02;
+  }
+
+  // Slider bounds: allow some flexibility around the plausible range
+  const min = Math.max(0.70, trlRange.min - minAdjustment - 0.05); // Allow going a bit below plausible
+  const max = 0.98; // Cap at 98% (some learning always possible)
+  const defaultLR = (trlRange.min + trlRange.max) / 2; // Default to middle of plausible range
+
+  return { min, max, default: defaultLR };
+}
+
+/**
+ * Compute the learned cost after N units deployed using Wright's Law
+ *
+ * Wright's Law: C_n = C_1 × n^b where b = ln(LR) / ln(2)
+ * This simplifies to: C_n = C_1 × LR^(log2(n))
+ *
+ * @param baselineCost Cost of the first unit
+ * @param learningRate Learning rate (e.g., 0.85 = 15% cost reduction per doubling)
+ * @param unitsDeployed Number of cumulative units deployed
+ * @returns Cost at the Nth unit
+ */
+export function computeLearnedCost(baselineCost: number, learningRate: number, unitsDeployed: number): number {
+  if (unitsDeployed <= 1) {
+    return baselineCost; // First unit is at baseline cost
+  }
+  if (learningRate >= 1) {
+    return baselineCost; // No learning
+  }
+  if (learningRate <= 0) {
+    return 0; // Invalid, but handle gracefully
+  }
+
+  const doublings = Math.log2(unitsDeployed);
+  const learnedCost = baselineCost * Math.pow(learningRate, doublings);
+
+  return Math.max(0, learnedCost);
+}
+
+/**
+ * Inverse Wright's Law: Compute required learning rate from cost ratio and units deployed
+ *
+ * Given: costRatio = currentCost / baselineCost
+ *        doublings = log2(N)
+ *
+ * Required LR = costRatio^(1/doublings)
+ *
+ * @param costRatio - Ratio of current cost to baseline cost (0 < ratio <= 1 for reduction)
+ * @param unitsDeployed - Number of units deployed (N)
+ * @returns Learning rate clamped to [0.50, 0.99]
+ */
+export function computeRequiredLearningRate(costRatio: number, unitsDeployed: number): number {
+  // Edge cases
+  if (unitsDeployed <= 1) {
+    // With 1 or fewer units, no learning is possible - return 1.0 (no reduction per doubling)
+    return 1.0;
+  }
+  if (costRatio >= 1) {
+    // No cost reduction needed
+    return 1.0;
+  }
+  if (costRatio <= 0) {
+    // Invalid ratio
+    return 0.50;
+  }
+
+  const doublings = Math.log2(unitsDeployed);
+  if (doublings <= 0) {
+    return 1.0;
+  }
+
+  // LR = costRatio^(1/doublings)
+  const requiredLR = Math.pow(costRatio, 1 / doublings);
+
+  // Clamp to reasonable range [0.50, 0.99]
+  return Math.max(0.50, Math.min(0.99, requiredLR));
+}
+
+/**
+ * Check if a computed learning rate is plausible for the given TRL
+ * Applies 5% tolerance to the base range minimum
+ * Only flags as out of range when LR is LESS than minimum (too aggressive)
+ *
+ * @param computedLR - The computed learning rate
+ * @param trl - Technology Readiness Level (1-9)
+ * @returns Object with inRange boolean and the applicable range
+ */
+export function isLearningRatePlausible(
+  computedLR: number,
+  trl: number
+): { inRange: boolean; range: { min: number; max: number }; toleranceRange: { min: number; max: number } } {
+  const baseRange = getPlausibleLRRange(trl);
+
+  // Apply 5% tolerance (5 percentage points) to minimum only
+  const toleranceRange = {
+    min: Math.max(0.50, baseRange.min - 0.05),
+    max: 1.00, // No upper limit - higher LR (slower learning) is always plausible
+  };
+
+  // Only flag as out of range when LR is too low (too aggressive learning)
+  const inRange = computedLR >= toleranceRange.min;
+
+  return { inRange, range: baseRange, toleranceRange };
+}
+
 export interface FinancialParams {
   wacc: number;
   lifetime: number;
   capacityFactor: number;
   capacityMw: number;
   constructionTime: number;
-}
-
-export interface FuelConstraints {
-  requiredSubsystems: string[];
-  disabledSubsystems: string[];
-  cfModifier: number;
-  regulatoryModifier: number;
-  description: string;
-}
-
-export interface ConfinementConstraints {
-  requiredSubsystems: string[];
-  disabledSubsystems: string[];
-  description: string;
+  unitsDeployed: number;  // Global N for fleet deployment
 }
 
 export type FuelType = 'D-T' | 'D-He3' | 'p-B11';
-export type ConfinementType = 'MCF' | 'ICF';
+export type ConfinementType = 'Tokamak' | 'Spherical Tokamak' | 'Stellarator' | 'Z-Pinch' | 'Magnetized Target' | 'Inertial';
 
-export const FUEL_CONSTRAINTS: Record<FuelType, FuelConstraints> = {
+// Confinement multipliers per account
+// "-" in the original table means no confinement multiplier applies (use 1.0, fuel multiplier only)
+export const CONFINEMENT_MULTIPLIERS: Record<ConfinementType, Record<string, number>> = {
+  'Tokamak': {
+    '22.1.1': 1, '22.1.2': 1, '22.1.3': 1, '22.1.5': 1, '22.1.6': 1, '22.1.7': 1,
+    '22.1.8': 0, '22.1.8b': 0, '23': 1, '24-26': 1, '22.5': 1,
+  },
+  'Spherical Tokamak': {
+    '22.1.1': 0.7, '22.1.2': 0.7, '22.1.3': 1.3, '22.1.5': 0.8, '22.1.6': 0.8, '22.1.7': 1.8,
+    '22.1.8': 0, '22.1.8b': 0, '23': 1.2, '24-26': 0.9, '22.5': 0.9,
+  },
+  'Stellarator': {
+    '22.1.1': 1.1, '22.1.2': 1.1, '22.1.3': 2.5, '22.1.5': 1.5, '22.1.6': 1.4, '22.1.7': 0.8,
+    '22.1.8': 0, '22.1.8b': 0, '23': 1, '24-26': 1.1, '22.5': 1,
+  },
+  'Z-Pinch': {
+    '22.1.1': 0.8, '22.1.2': 0.8, '22.1.3': 0.1, '22.1.5': 0.5, '22.1.6': 0.6, '22.1.7': 2,
+    '22.1.8': 0, '22.1.8b': 0, '23': 1.5, '24-26': 0.7, '22.5': 1,
+  },
+  'Magnetized Target': {
+    '22.1.1': 0.8, '22.1.2': 0.8, '22.1.3': 0.05, '22.1.5': 0.4, '22.1.6': 0.5, '22.1.7': 1.2,
+    '22.1.8': 0, '22.1.8b': 1, '23': 1.4, '24-26': 0.6, '22.5': 1,
+  },
+  'Inertial': {
+    '22.1.1': 0.8, '22.1.2': 0.8, '22.1.3': 0, '22.1.5': 0.5, '22.1.6': 0.7, '22.1.7': 1.5,
+    '22.1.8': 1, '22.1.8b': 0, '23': 1.4, '24-26': 0.7, '22.5': 1,
+  },
+};
+
+// Fuel multipliers per account
+// 0 means the account is not used for that fuel type
+export const FUEL_MULTIPLIERS: Record<FuelType, Record<string, number>> = {
   'D-T': {
-    requiredSubsystems: ['22.5', '23'],
-    disabledSubsystems: ['22.1.9', '22.6'],
-    cfModifier: 0.95,
-    regulatoryModifier: 1.20,
-    description: 'D-T fusion requires tritium breeding and thermal conversion. High neutron flux causes material damage (-5% CF) and requires additional regulatory compliance (+20% costs).',
+    '22.1.1': 1, '22.1.2': 1, '22.1.3': 1, '22.1.5': 1, '22.1.6': 1, '22.1.7': 1,
+    '22.1.8': 1, '22.1.8b': 1, '23': 1, '24-26': 1, '22.5': 1, '22.1.9': 0, '22.6': 0,
   },
   'D-He3': {
-    requiredSubsystems: ['22.6', '23'],
-    disabledSubsystems: ['22.5'],
-    cfModifier: 0.98,
-    regulatoryModifier: 1.10,
-    description: 'D-He3 fusion produces fewer neutrons, reducing material damage and regulatory burden. Requires He3 production infrastructure.',
+    '22.1.1': 0.3, '22.1.2': 0.3, '22.1.3': 1.8, '22.1.5': 0.8, '22.1.6': 1.2, '22.1.7': 1.5,
+    '22.1.8': 1, '22.1.8b': 1, '23': 0, '24-26': 0.8, '22.5': 0.2, '22.1.9': 1, '22.6': 1,
   },
   'p-B11': {
-    requiredSubsystems: ['22.1.9'],
-    disabledSubsystems: ['22.5', '22.6', '23', '22.1.2'],
-    cfModifier: 1.0,
-    regulatoryModifier: 1.0,
-    description: 'p-B11 is aneutronic, enabling direct energy conversion. No tritium handling, He3 production, or neutron shielding needed. Minimal regulatory burden, but requires much higher plasma temperatures.',
+    '22.1.1': 0.1, '22.1.2': 0.1, '22.1.3': 2, '22.1.5': 0.7, '22.1.6': 1.3, '22.1.7': 1.8,
+    '22.1.8': 1, '22.1.8b': 1, '23': 0, '24-26': 0.7, '22.5': 0.1, '22.1.9': 0.85, '22.6': 0,
   },
 };
 
-export const CONFINEMENT_CONSTRAINTS: Record<ConfinementType, ConfinementConstraints> = {
-  'MCF': {
-    requiredSubsystems: ['22.1.3'],
-    disabledSubsystems: ['22.1.8'],
-    description: 'Magnetic Confinement Fusion (tokamak, stellarator, etc.) uses superconducting magnets to confine plasma.',
+// Fuel descriptions and modifiers (CF and regulatory)
+export const FUEL_INFO: Record<FuelType, { cfModifier: number; regulatoryModifier: number; description: string }> = {
+  'D-T': {
+    cfModifier: 0.95,
+    regulatoryModifier: 1.20,
+    description: 'D-T fusion requires tritium breeding. High neutron flux causes material damage (-5% CF) and requires additional regulatory compliance (+20% costs).',
   },
-  'ICF': {
-    requiredSubsystems: ['22.1.8'],
-    disabledSubsystems: ['22.1.3'],
-    description: 'Inertial Confinement Fusion uses lasers or other drivers to compress and heat fuel pellets.',
+  'D-He3': {
+    cfModifier: 0.98,
+    regulatoryModifier: 1.10,
+    description: 'D-He3 fusion produces fewer neutrons, reducing material damage and regulatory burden. Enables direct energy conversion.',
+  },
+  'p-B11': {
+    cfModifier: 1.0,
+    regulatoryModifier: 1.0,
+    description: 'p-B11 is aneutronic, enabling direct energy conversion. Minimal regulatory burden, but requires much higher plasma temperatures.',
   },
 };
+
+// Confinement descriptions
+export const CONFINEMENT_INFO: Record<ConfinementType, { description: string }> = {
+  'Tokamak': {
+    description: 'Conventional tokamak with superconducting magnets. Baseline reference design.',
+  },
+  'Spherical Tokamak': {
+    description: 'Compact tokamak with low aspect ratio. Reduced shielding but higher recirculating power.',
+  },
+  'Stellarator': {
+    description: 'Steady-state operation with complex 3D magnets. No plasma current drive needed.',
+  },
+  'Z-Pinch': {
+    description: 'Pulsed linear device using plasma self-field. Minimal external magnets.',
+  },
+  'Magnetized Target': {
+    description: 'Magneto-inertial fusion. Combines magnetic and inertial approaches to plasma compression.',
+  },
+  'Inertial': {
+    description: 'Laser-driven inertial confinement. Pulsed operation with target injection.',
+  },
+};
+
+/**
+ * Get the effective multiplier for a subsystem based on confinement and fuel type
+ */
+export function getEffectiveMultiplier(
+  account: string,
+  confinementType: ConfinementType,
+  fuelType: FuelType
+): number {
+  const confinementMult = CONFINEMENT_MULTIPLIERS[confinementType]?.[account];
+  const fuelMult = FUEL_MULTIPLIERS[fuelType]?.[account];
+
+  // If either multiplier is undefined, the account doesn't vary by that dimension
+  // If either is 0, the account is disabled for that configuration
+  const confMult = confinementMult !== undefined ? confinementMult : 1;
+  const fMult = fuelMult !== undefined ? fuelMult : 1;
+
+  return confMult * fMult;
+}
 
 /**
  * Calculate capital cost per kW from absolute cost
@@ -208,15 +415,16 @@ export interface LCOEBreakdown {
 
 /**
  * Calculate LCOE from subsystems and financial parameters
+ * Applies confinement and fuel multipliers to baseline costs
  */
 export function calculateLCOE(
   subsystems: Subsystem[],
   financialParams: FinancialParams,
   fuelType: FuelType,
-  _confinementType: ConfinementType
+  confinementType: ConfinementType
 ): LCOEBreakdown {
-  const constraints = FUEL_CONSTRAINTS[fuelType];
-  const effectiveCF = financialParams.capacityFactor * constraints.cfModifier;
+  const fuelInfo = FUEL_INFO[fuelType];
+  const effectiveCF = financialParams.capacityFactor * fuelInfo.cfModifier;
   const crf = calculateCRF(financialParams.wacc, financialParams.lifetime);
   const hoursPerYear = 8760;
   const energyPerKw = (effectiveCF * hoursPerYear) / 1000; // MWh per kW per year
@@ -228,25 +436,36 @@ export function calculateLCOE(
   const subsystemOm: Record<string, number> = {};
 
   for (const sub of subsystems) {
-    if (sub.disabled) continue;
+    // Get effective multiplier for this subsystem
+    const multiplier = getEffectiveMultiplier(sub.account, confinementType, fuelType);
+
+    // Skip if multiplier is 0 (subsystem not used for this configuration)
+    if (multiplier === 0) continue;
+
+    // Apply multiplier to baseline costs, then use user-adjusted ratio
+    // effectiveCost = baselineCost * multiplier * (currentCost / baselineCost)
+    //               = currentCost * multiplier
+    const effectiveCapitalCost = sub.absoluteCapitalCost * multiplier;
+    const effectiveFixedOm = sub.absoluteFixedOm * multiplier;
 
     // Convert absolute costs to $/kW
-    const capPerKw = capitalCostPerKw(sub.absoluteCapitalCost, financialParams.capacityMw);
-    const omPerKw = fixedOmPerKw(sub.absoluteFixedOm, financialParams.capacityMw);
+    const capPerKw = capitalCostPerKw(effectiveCapitalCost, financialParams.capacityMw);
+    const omPerKw = fixedOmPerKw(effectiveFixedOm, financialParams.capacityMw);
 
     totalCapex += capPerKw;
     totalFixedOm += omPerKw;
-    totalVariableOm += sub.variableOm;
+    totalVariableOm += sub.variableOm * multiplier;
 
-    const subCapitalContrib = (crf * capPerKw) / energyPerKw;
-    const subOmContrib = omPerKw / energyPerKw + sub.variableOm;
+    // Apply regulatory modifier to per-subsystem capital contribution so they sum correctly
+    const subCapitalContrib = (crf * capPerKw * fuelInfo.regulatoryModifier) / energyPerKw;
+    const subOmContrib = omPerKw / energyPerKw + sub.variableOm * multiplier;
 
     subsystemCapital[sub.account] = Math.round(subCapitalContrib * 100) / 100;
     subsystemOm[sub.account] = Math.round(subOmContrib * 100) / 100;
   }
 
-  // Apply regulatory modifier
-  totalCapex *= constraints.regulatoryModifier;
+  // Apply regulatory modifier to total
+  totalCapex *= fuelInfo.regulatoryModifier;
 
   const capitalContribution = (crf * totalCapex) / energyPerKw;
   const fixedOmContribution = totalFixedOm / energyPerKw;
@@ -254,6 +473,16 @@ export function calculateLCOE(
   const fuelContribution = 0;
 
   const totalLcoe = capitalContribution + fixedOmContribution + variableOmContribution + fuelContribution;
+
+  // Verification: sum of per-subsystem values should match totals
+  const sumSubsystemCapital = Object.values(subsystemCapital).reduce((a, b) => a + b, 0);
+  const sumSubsystemOm = Object.values(subsystemOm).reduce((a, b) => a + b, 0);
+  const sumTotal = sumSubsystemCapital + sumSubsystemOm;
+
+  // Only log if there's a significant mismatch (debugging aid)
+  if (Math.abs(sumTotal - totalLcoe) > 0.5) {
+    console.error('LCOE MISMATCH:', { sumTotal: sumTotal.toFixed(2), totalLcoe: totalLcoe.toFixed(2), diff: (sumTotal - totalLcoe).toFixed(2) });
+  }
 
   return {
     capitalContribution: Math.round(capitalContribution * 100) / 100,
@@ -312,8 +541,8 @@ export function solveForCapex(
   financialParams: FinancialParams,
   fuelType: FuelType
 ): { value: number; feasible: boolean; explanation: string; perKw: number } {
-  const constraints = FUEL_CONSTRAINTS[fuelType];
-  const effectiveCF = financialParams.capacityFactor * constraints.cfModifier;
+  const fuelInfo = FUEL_INFO[fuelType];
+  const effectiveCF = financialParams.capacityFactor * fuelInfo.cfModifier;
   const crf = calculateCRF(financialParams.wacc, financialParams.lifetime);
   const energyPerKw = (effectiveCF * 8760) / 1000;
 
@@ -324,7 +553,7 @@ export function solveForCapex(
   const currentCapexAbs = subsystems.filter(s => !s.disabled).reduce((sum, s) => sum + s.absoluteCapitalCost, 0);
 
   const maxCapexWithReg = ((targetLcoe - totalVariableOm) * energyPerKw - totalFixedOm) / crf;
-  const maxCapexPerKw = maxCapexWithReg / constraints.regulatoryModifier;
+  const maxCapexPerKw = maxCapexWithReg / fuelInfo.regulatoryModifier;
   const maxCapexAbs = maxCapexPerKw * financialParams.capacityMw * 1000 / 1e6;
 
   const feasible = maxCapexAbs > 0 && maxCapexAbs >= currentCapexAbs * 0.3;
@@ -350,13 +579,13 @@ export function solveForCapacityFactor(
   financialParams: FinancialParams,
   fuelType: FuelType
 ): { value: number; feasible: boolean; explanation: string } {
-  const constraints = FUEL_CONSTRAINTS[fuelType];
+  const fuelInfo = FUEL_INFO[fuelType];
   const crf = calculateCRF(financialParams.wacc, financialParams.lifetime);
 
   const totalCapex = subsystems
     .filter(s => !s.disabled)
     .reduce((sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0)
-    * constraints.regulatoryModifier;
+    * fuelInfo.regulatoryModifier;
   const totalFixedOm = subsystems
     .filter(s => !s.disabled)
     .reduce((sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0);
@@ -372,7 +601,7 @@ export function solveForCapacityFactor(
   }
 
   const requiredCfBase = (crf * totalCapex + totalFixedOm) / denominator;
-  const requiredCf = requiredCfBase / constraints.cfModifier;
+  const requiredCf = requiredCfBase / fuelInfo.cfModifier;
 
   const feasible = requiredCf >= 0.5 && requiredCf <= 0.98;
 
@@ -399,14 +628,14 @@ export function solveForWacc(
   financialParams: FinancialParams,
   fuelType: FuelType
 ): { value: number; feasible: boolean; explanation: string } {
-  const constraints = FUEL_CONSTRAINTS[fuelType];
-  const effectiveCF = financialParams.capacityFactor * constraints.cfModifier;
+  const fuelInfo = FUEL_INFO[fuelType];
+  const effectiveCF = financialParams.capacityFactor * fuelInfo.cfModifier;
   const energyPerKw = (effectiveCF * 8760) / 1000;
 
   const totalCapex = subsystems
     .filter(s => !s.disabled)
     .reduce((sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0)
-    * constraints.regulatoryModifier;
+    * fuelInfo.regulatoryModifier;
   const totalFixedOm = subsystems
     .filter(s => !s.disabled)
     .reduce((sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0);
@@ -478,213 +707,152 @@ export function getLearningPotential(idiotIndex: number): string {
 }
 
 /**
- * Solve for target LCOE by adjusting subsystem costs.
- * Prioritizes reducing costs on subsystems with highest idiot index (most learning potential).
- * Reduces both capital AND O&M proportionally (O&M scales with capital via learning curve).
- * Respects locked subsystem values - won't modify capex/om if locked.
- * Returns updated subsystems with new costs.
+ * Solve for target LCOE by adjusting learning rates.
+ * In the forward model, costs are computed from: baseline × LR^(log2(N))
+ * To reduce costs, we decrease LR (more aggressive learning).
+ * Prioritizes subsystems with highest idiot index (most learning potential).
+ * Respects locked subsystems - won't modify their learning rates.
+ * Returns updated subsystems with new learning rates.
  */
 export function solveAndApplyTarget(
   targetLcoe: number,
   subsystems: Subsystem[],
   financialParams: FinancialParams,
   fuelType: FuelType
-): { subsystems: Subsystem[]; success: boolean; message: string } {
-  const constraints = FUEL_CONSTRAINTS[fuelType];
-  const effectiveCF = financialParams.capacityFactor * constraints.cfModifier;
+): { subsystems: Subsystem[]; success: boolean; message: string; implausibleLRCount: number } {
+  const fuelInfo = FUEL_INFO[fuelType];
+  const effectiveCF = financialParams.capacityFactor * fuelInfo.cfModifier;
   const crf = calculateCRF(financialParams.wacc, financialParams.lifetime);
   const energyPerKw = (effectiveCF * 8760) / 1000;
+  const doublings = Math.log2(Math.max(1, financialParams.unitsDeployed));
 
   // Get active subsystems
   const activeSubsystems = subsystems.filter(s => !s.disabled);
 
-  // Calculate current totals
-  const currentCapexAbs = activeSubsystems.reduce((sum, s) => sum + s.absoluteCapitalCost, 0);
-  const currentOmAbs = activeSubsystems.reduce((sum, s) => sum + s.absoluteFixedOm, 0);
-  const totalVariableOm = activeSubsystems.reduce((sum, s) => sum + s.variableOm, 0);
-
-  // Convert to $/kW
+  // Calculate current costs (using current learning rates)
   const currentCapexPerKw = activeSubsystems.reduce(
     (sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0
-  ) * constraints.regulatoryModifier;
+  ) * fuelInfo.regulatoryModifier;
   const currentOmPerKw = activeSubsystems.reduce(
     (sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0
   );
+  const totalVariableOm = activeSubsystems.reduce((sum, s) => sum + s.variableOm, 0);
 
   // Current LCOE
   const currentLcoe = (crf * currentCapexPerKw + currentOmPerKw) / energyPerKw + totalVariableOm;
 
   if (currentLcoe <= targetLcoe) {
+    // Already at target
+    const implausibleCount = subsystems.filter(s => !s.disabled && s.lrOutOfRange).length;
     return {
-      subsystems,
+      subsystems: subsystems.map(s => ({ ...s })), // Create new references
       success: true,
       message: `Already at or below target! Current LCOE $${currentLcoe.toFixed(2)}/MWh <= target $${targetLcoe}/MWh`,
+      implausibleLRCount: implausibleCount,
     };
   }
 
-  // Check if there's anything to adjust
-  const hasAdjustable = activeSubsystems.some(s => !s.lockedCapex || !s.lockedOm);
-  if (!hasAdjustable) {
+  // Check if there's anything to adjust (unlocked subsystems)
+  const adjustableSubsystems = activeSubsystems.filter(s => !s.lockedCapex);
+  if (adjustableSubsystems.length === 0) {
+    const implausibleCount = subsystems.filter(s => !s.disabled && s.lrOutOfRange).length;
     return {
-      subsystems,
+      subsystems: subsystems.map(s => ({ ...s })),
       success: false,
-      message: `All subsystems are locked. Unlock some to apply learning curve.`,
+      message: `All subsystems are locked. Unlock some to adjust learning rates.`,
+      implausibleLRCount: implausibleCount,
     };
   }
 
-  // Get adjustable subsystems for weighted reduction
-  const adjustableSubsystems = activeSubsystems.filter(s => !s.lockedCapex || !s.lockedOm);
+  // Calculate how much cost reduction we need
+  // LCOE = (CRF * CapEx + FixedOM) / Energy + VarOM
+  // We need to reduce CapEx + FixedOM proportionally
+  const costReductionRatio = targetLcoe / currentLcoe;
 
-  // Calculate locked contribution to LCOE
-  const lockedCapexPerKw = activeSubsystems
-    .filter(s => s.lockedCapex)
-    .reduce((sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0)
-    * constraints.regulatoryModifier;
-  const lockedOmPerKw = activeSubsystems
-    .filter(s => s.lockedOm)
-    .reduce((sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0);
-  const lockedLcoeContrib = (crf * lockedCapexPerKw + lockedOmPerKw) / energyPerKw;
+  // Distribute the reduction across unlocked subsystems weighted by idiot index
+  const totalII = adjustableSubsystems.reduce((sum, s) => sum + s.baselineIdiotIndex, 0);
 
-  // Target LCOE that adjustable costs must achieve
-  const adjustableTargetLcoe = targetLcoe - totalVariableOm - lockedLcoeContrib;
-
-  if (adjustableTargetLcoe <= 0) {
-    return {
-      subsystems,
-      success: false,
-      message: `Impossible: Locked costs + variable O&M ($${(lockedLcoeContrib + totalVariableOm).toFixed(2)}/MWh) exceed target LCOE of $${targetLcoe}/MWh. Unlock some subsystems.`,
-    };
-  }
-
-  // Current adjustable LCOE
-  const adjustableCapexPerKw = activeSubsystems
-    .filter(s => !s.lockedCapex)
-    .reduce((sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0)
-    * constraints.regulatoryModifier;
-  const adjustableOmPerKw = activeSubsystems
-    .filter(s => !s.lockedOm)
-    .reduce((sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0);
-  const currentAdjustableLcoe = (crf * adjustableCapexPerKw + adjustableOmPerKw) / energyPerKw;
-
-  // Scale factor needed for adjustable costs
-  const uniformScaleFactor = adjustableTargetLcoe / currentAdjustableLcoe;
-
-  if (uniformScaleFactor >= 1) {
-    return {
-      subsystems,
-      success: true,
-      message: `Already at or below target! Scale factor ${uniformScaleFactor.toFixed(2)} >= 1.0`,
-    };
-  }
-
-  // Minimum scale factor (can't reduce below 10% of baseline)
-  const minScaleFactor = 0.10;
-
-  // Calculate average idiot index for adjustable subsystems
-  const totalWeight = adjustableSubsystems.reduce((sum, s) => sum + calculateIdiotIndex(s), 0);
-  const avgWeight = totalWeight / Math.max(1, adjustableSubsystems.length);
-
-  // Calculate how much total cost reduction we need
-  const totalReductionNeeded = (1 - uniformScaleFactor);
-
-  // Apply weighted reductions only to unlocked values
+  // Apply learning rate adjustments
   const updatedSubsystems = subsystems.map(sub => {
-    if (sub.disabled) return sub;
+    if (sub.disabled || sub.lockedCapex) {
+      return { ...sub };
+    }
 
-    // Skip if both are locked
-    if (sub.lockedCapex && sub.lockedOm) return sub;
+    // Weight this subsystem's contribution by its idiot index
+    const iiWeight = sub.baselineIdiotIndex / totalII;
 
-    const idiotIndex = calculateIdiotIndex(sub);
-    // Weight factor: subsystems with higher II get reduced more
-    const weightFactor = idiotIndex / avgWeight;
+    // Calculate target cost ratio for this subsystem
+    // Higher II subsystems get more aggressive reduction
+    const avgReduction = 1 - costReductionRatio;
+    const thisReduction = avgReduction * (1 + (iiWeight * adjustableSubsystems.length - 1) * 0.5);
+    const targetCostRatio = Math.max(0.1, 1 - thisReduction);
 
-    // Calculate this subsystem's reduction factor
-    let scaleFactor = 1 - (totalReductionNeeded * weightFactor);
-    scaleFactor = Math.max(minScaleFactor, Math.min(1.0, scaleFactor));
+    // Calculate required learning rate to achieve this cost ratio
+    // costRatio = LR^doublings, so LR = costRatio^(1/doublings)
+    let newLR: number;
+    if (doublings <= 0) {
+      newLR = sub.learningRate; // Can't learn with no doublings
+    } else {
+      newLR = Math.pow(targetCostRatio, 1 / doublings);
+    }
 
-    // Only reduce unlocked values
-    const newCapitalCost = sub.lockedCapex
-      ? sub.absoluteCapitalCost
-      : Math.floor(sub.absoluteCapitalCost * scaleFactor);
-    const newFixedOm = sub.lockedOm
-      ? sub.absoluteFixedOm
-      : Math.floor(sub.absoluteFixedOm * scaleFactor);
+    // Clamp to bounds
+    const lrBounds = getLearningRateBounds(sub.trl, sub.baselineIdiotIndex);
+    newLR = Math.max(lrBounds.min, Math.min(lrBounds.max, newLR));
+
+    // Compute new costs with this learning rate
+    const newCapex = computeLearnedCost(sub.baselineCapitalCost, newLR, financialParams.unitsDeployed);
+    const newOm = computeLearnedCost(sub.baselineFixedOm, newLR, financialParams.unitsDeployed);
+
+    // Check if LR is out of plausible range
+    const plausibleRange = getPlausibleLRRange(sub.trl);
+    const lrOutOfRange = newLR < plausibleRange.min;
 
     return {
       ...sub,
-      absoluteCapitalCost: newCapitalCost,
-      absoluteFixedOm: newFixedOm,
+      learningRate: newLR,
+      absoluteCapitalCost: Math.round(newCapex),
+      absoluteFixedOm: Math.round(newOm),
+      lrOutOfRange,
     };
   });
 
-  // Verify we hit target - may need iterative adjustment
-  let activeUpdated = updatedSubsystems.filter(s => !s.disabled);
-  let newCapexPerKw = activeUpdated.reduce(
+  // Calculate new LCOE
+  const activeUpdated = updatedSubsystems.filter(s => !s.disabled);
+  const newCapexPerKw = activeUpdated.reduce(
     (sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0
-  ) * constraints.regulatoryModifier;
-  let newOmPerKw = activeUpdated.reduce(
+  ) * fuelInfo.regulatoryModifier;
+  const newOmPerKw = activeUpdated.reduce(
     (sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0
   );
-  let newLcoe = (crf * newCapexPerKw + newOmPerKw) / energyPerKw + totalVariableOm;
+  const newLcoe = (crf * newCapexPerKw + newOmPerKw) / energyPerKw + totalVariableOm;
 
-  // If we're still above target, do uniform additional reduction on adjustable (unlocked) subsystems
-  let iterations = 0;
-  while (newLcoe > targetLcoe && iterations < 20) {
-    const adjustable = updatedSubsystems.filter(s =>
-      !s.disabled &&
-      (!s.lockedCapex || !s.lockedOm) &&
-      ((!s.lockedCapex && s.absoluteCapitalCost > s.baselineCapitalCost * minScaleFactor) ||
-       (!s.lockedOm && s.absoluteFixedOm > s.baselineFixedOm * minScaleFactor))
-    );
+  // Count implausible learning rates
+  const implausibleLRCount = updatedSubsystems.filter(s => !s.disabled && s.lrOutOfRange).length;
 
-    if (adjustable.length === 0) break;
+  // Calculate totals for message
+  const oldCapexTotal = activeSubsystems.reduce((sum, s) => sum + s.absoluteCapitalCost, 0);
+  const newCapexTotal = activeUpdated.reduce((sum, s) => sum + s.absoluteCapitalCost, 0);
+  const capexReduction = oldCapexTotal - newCapexTotal;
 
-    // Calculate additional reduction needed
-    const gapRatio = (targetLcoe - 0.005) / newLcoe;
-
-    adjustable.forEach(sub => {
-      if (!sub.lockedCapex) {
-        const minCap = Math.floor(sub.baselineCapitalCost * minScaleFactor);
-        sub.absoluteCapitalCost = Math.max(minCap, Math.floor(sub.absoluteCapitalCost * gapRatio));
-      }
-      if (!sub.lockedOm) {
-        const minOm = Math.floor(sub.baselineFixedOm * minScaleFactor);
-        sub.absoluteFixedOm = Math.max(minOm, Math.floor(sub.absoluteFixedOm * gapRatio));
-      }
-    });
-
-    activeUpdated = updatedSubsystems.filter(s => !s.disabled);
-    newCapexPerKw = activeUpdated.reduce(
-      (sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0
-    ) * constraints.regulatoryModifier;
-    newOmPerKw = activeUpdated.reduce(
-      (sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0
-    );
-    newLcoe = (crf * newCapexPerKw + newOmPerKw) / energyPerKw + totalVariableOm;
-    iterations++;
-  }
-
-  const finalCapexAbs = activeUpdated.reduce((sum, s) => sum + s.absoluteCapitalCost, 0);
-  const finalOmAbs = activeUpdated.reduce((sum, s) => sum + s.absoluteFixedOm, 0);
-  const capexReduction = currentCapexAbs - finalCapexAbs;
-  const omReduction = currentOmAbs - finalOmAbs;
-
-  // Count locked subsystems for message
-  const lockedCount = activeSubsystems.filter(s => s.lockedCapex || s.lockedOm).length;
-  const lockedNote = lockedCount > 0 ? ` (${lockedCount} subsystem(s) locked)` : '';
+  const lockedCount = activeSubsystems.filter(s => s.lockedCapex).length;
+  const lockedNote = lockedCount > 0 ? ` (${lockedCount} locked)` : '';
+  const lrWarning = implausibleLRCount > 0 ? ` ${implausibleLRCount} subsystem(s) require aggressive learning rates.` : '';
 
   if (newLcoe > targetLcoe + 0.5) {
     return {
       subsystems: updatedSubsystems,
       success: false,
-      message: `Partial reduction: LCOE reduced to $${newLcoe.toFixed(2)}/MWh (target: $${targetLcoe}/MWh)${lockedNote}. CapEx -$${Math.round(capexReduction)}M, O&M -$${Math.round(omReduction)}M/yr. Try unlocking more subsystems.`,
+      message: `Partial: LCOE reduced to $${newLcoe.toFixed(2)}/MWh (target: $${targetLcoe}/MWh)${lockedNote}. CapEx -$${Math.round(capexReduction)}M.${lrWarning}`,
+      implausibleLRCount,
     };
   }
 
   return {
     subsystems: updatedSubsystems,
     success: true,
-    message: `Hit target!${lockedNote} CapEx -$${Math.round(capexReduction)}M (to $${Math.round(finalCapexAbs)}M), O&M -$${Math.round(omReduction)}M/yr (to $${Math.round(finalOmAbs)}M/yr). LCOE: $${newLcoe.toFixed(2)}/MWh`,
+    message: `Target achieved!${lockedNote} CapEx reduced by $${Math.round(capexReduction)}M to $${Math.round(newCapexTotal)}M. LCOE: $${newLcoe.toFixed(2)}/MWh${lrWarning}`,
+    implausibleLRCount,
   };
 }
 

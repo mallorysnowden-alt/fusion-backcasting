@@ -1,5 +1,17 @@
 import { useFusionStore } from '../store';
 
+// Logarithmic scale helpers for units deployed slider (2 to 10,000)
+const MIN_UNITS_LOG = Math.log10(2); // log10(2) ≈ 0.301
+const MAX_UNITS_LOG = 4; // log10(10000) = 4
+
+function unitsToSlider(units: number): number {
+  return Math.log10(Math.max(2, units));
+}
+
+function sliderToUnits(sliderValue: number): number {
+  return Math.max(2, Math.round(Math.pow(10, sliderValue)));
+}
+
 export function FinancialPanel() {
   const { financialParams, updateFinancialParams } = useFusionStore();
 
@@ -72,6 +84,45 @@ export function FinancialPanel() {
           description="Time from groundbreaking to operation"
           onChange={(value) => updateFinancialParams({ constructionTime: value })}
         />
+
+        {/* Units Deployed - Logarithmic Scale Slider */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Units Deployed</span>
+            <span className="text-sm font-semibold text-fusion-600 dark:text-fusion-400">
+              {financialParams.unitsDeployed.toLocaleString()} units
+            </span>
+          </div>
+          <div className="relative">
+            <input
+              type="range"
+              min={MIN_UNITS_LOG}
+              max={MAX_UNITS_LOG}
+              step={0.01}
+              value={unitsToSlider(financialParams.unitsDeployed)}
+              onChange={(e) => updateFinancialParams({ unitsDeployed: sliderToUnits(Number(e.target.value)) })}
+              className="w-full"
+            />
+            {/* Default value marker at 100 units (log10(100) = 2) */}
+            <div
+              className="absolute top-0 h-4 flex flex-col items-center pointer-events-none"
+              style={{ left: `calc(${(2 / MAX_UNITS_LOG) * 100}% + ${7 - (2 / MAX_UNITS_LOG) * 100 * 0.14}px)` }}
+            >
+              <div className={`w-0.5 h-4 ${Math.abs(financialParams.unitsDeployed - 100) < 10 ? 'bg-fusion-500' : 'bg-gray-400 dark:bg-gray-500'}`} />
+            </div>
+            {Math.abs(financialParams.unitsDeployed - 100) >= 10 && (
+              <div
+                className="absolute top-5 text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap pointer-events-none transform -translate-x-1/2"
+                style={{ left: `calc(${(2 / MAX_UNITS_LOG) * 100}% + ${7 - (2 / MAX_UNITS_LOG) * 100 * 0.14}px)` }}
+              >
+                ↑ 100
+              </div>
+            )}
+          </div>
+          <div className={`text-xs text-gray-400 ${Math.abs(financialParams.unitsDeployed - 100) >= 10 ? 'mt-5' : 'mt-1'}`}>
+            Fleet deployment count
+          </div>
+        </div>
       </div>
 
       {/* Quick reference */}

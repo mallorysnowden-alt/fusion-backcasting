@@ -1,9 +1,8 @@
 import { LCOEDisplay } from './components/LCOEDisplay';
-import { FeasibilityIndicator } from './components/FeasibilityIndicator';
+import { CapitalBreakdownChart } from './components/CapitalBreakdownChart';
 import { FuelTypeSelector } from './components/FuelTypeSelector';
 import { ConfinementTypeSelector } from './components/ConfinementTypeSelector';
 import { SubsystemPanel } from './components/SubsystemPanel';
-import { SolveForButtons } from './components/SolveForButtons';
 import { FinancialPanel } from './components/FinancialPanel';
 import { useDarkMode } from './hooks/useDarkMode';
 
@@ -48,18 +47,21 @@ function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-6">
+        {/* Top Row - Fuel Type & Confinement Side by Side */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+          <FuelTypeSelector />
+          <ConfinementTypeSelector />
+        </div>
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Column - LCOE Display & Feasibility */}
+          {/* Left Column - LCOE Display & Capital Breakdown */}
           <div className="lg:col-span-1 space-y-6">
             <LCOEDisplay />
-            <FeasibilityIndicator />
-            <SolveForButtons />
+            <CapitalBreakdownChart />
           </div>
 
-          {/* Middle Column - Fuel Type, Confinement & Financial */}
+          {/* Middle Column - Financial */}
           <div className="lg:col-span-1 space-y-6">
-            <FuelTypeSelector />
-            <ConfinementTypeSelector />
             <FinancialPanel />
           </div>
 

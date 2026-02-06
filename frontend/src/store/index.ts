@@ -6,12 +6,13 @@ import {
   ConfinementType,
   LCOEBreakdown,
   FeasibilityResult,
-  FUEL_CONSTRAINTS,
-  CONFINEMENT_CONSTRAINTS,
   calculateLCOE,
+  calculateCRF,
   getFeasibilityStatus,
   capitalCostPerKw,
-  solveAndApplyTarget,
+  getEffectiveMultiplier,
+  getPlausibleLRRange,
+  FUEL_INFO,
 } from '../utils/calculations';
 
 // Default subsystems with absolute costs ($M for 1000 MW reference)
@@ -141,6 +142,23 @@ const DEFAULT_SUBSYSTEMS: Subsystem[] = [
     description: 'High-power laser or particle beam driver for inertial confinement. Very high learning potential.',
   },
   {
+    account: '22.1.8b',
+    name: 'Implosion Drivers (non-laser)',
+    absoluteCapitalCost: 150,
+    absoluteFixedOm: 4.5,
+    variableOm: 0,
+    trl: 5,
+    baselineIdiotIndex: 10.0,
+    baselineCapitalCost: 150,
+    baselineFixedOm: 4.5,
+    learningRate: 0.85,
+    required: false,
+    disabled: false,
+    lockedCapex: false,
+    lockedOm: false,
+    description: 'Non-laser implosion drivers for inertial confinement (e.g., pulsed power, heavy ion beams).',
+  },
+  {
     account: '22.1.9',
     name: 'Direct Energy Conversion',
     absoluteCapitalCost: 300,
@@ -233,6 +251,7 @@ const DEFAULT_FINANCIAL_PARAMS: FinancialParams = {
   capacityFactor: 0.90,
   capacityMw: 1000,
   constructionTime: 5,
+  unitsDeployed: 2,
 };
 
 interface FusionStore {
@@ -248,9 +267,8 @@ interface FusionStore {
   feasibility: FeasibilityResult;
   totalCapexAbs: number;
   totalCapexPerKw: number;
-
-  // Solve result message
-  solveMessage: string | null;
+  isTargetAttainable: boolean;
+  minimumAttainableLcoe: number;
 
   // Actions
   setTargetLcoe: (value: number) => void;
@@ -260,38 +278,30 @@ interface FusionStore {
   updateFinancialParams: (updates: Partial<FinancialParams>) => void;
   resetToDefaults: () => void;
   recalculate: () => void;
-  applyTargetLcoe: () => { success: boolean; message: string };
-  clearSolveMessage: () => void;
 }
 
-function applyConstraints(
+/**
+ * Update subsystem disabled/required status based on multipliers
+ */
+function updateSubsystemStatus(
   subsystems: Subsystem[],
   fuelType: FuelType,
   confinementType: ConfinementType
 ): Subsystem[] {
-  const fuelConstraints = FUEL_CONSTRAINTS[fuelType];
-  const confinementConstraints = CONFINEMENT_CONSTRAINTS[confinementType];
-
-  const required = new Set([
-    ...fuelConstraints.requiredSubsystems,
-    ...confinementConstraints.requiredSubsystems,
-  ]);
-  const disabled = new Set([
-    ...fuelConstraints.disabledSubsystems,
-    ...confinementConstraints.disabledSubsystems,
-  ]);
-
-  return subsystems.map(sub => ({
-    ...sub,
-    required: required.has(sub.account),
-    disabled: disabled.has(sub.account),
-  }));
+  return subsystems.map(sub => {
+    const multiplier = getEffectiveMultiplier(sub.account, confinementType, fuelType);
+    return {
+      ...sub,
+      disabled: multiplier === 0,
+      required: multiplier > 0 && multiplier !== 1, // Mark as "required" if it has a non-unity multiplier
+    };
+  });
 }
 
 export const useFusionStore = create<FusionStore>((set, get) => {
-  // Initialize with D-T + MCF constraints applied
-  const initialSubsystems = applyConstraints(DEFAULT_SUBSYSTEMS, 'D-T', 'MCF');
-  const initialBreakdown = calculateLCOE(initialSubsystems, DEFAULT_FINANCIAL_PARAMS, 'D-T', 'MCF');
+  // Initialize with D-T + Tokamak
+  const initialSubsystems = updateSubsystemStatus(DEFAULT_SUBSYSTEMS, 'D-T', 'Tokamak');
+  const initialBreakdown = calculateLCOE(initialSubsystems, DEFAULT_FINANCIAL_PARAMS, 'D-T', 'Tokamak');
   const initialFeasibility = getFeasibilityStatus(initialBreakdown.totalLcoe, 10);
   const initialCapexAbs = initialSubsystems
     .filter(s => !s.disabled)
@@ -303,30 +313,31 @@ export const useFusionStore = create<FusionStore>((set, get) => {
   return {
     targetLcoe: 10,
     fuelType: 'D-T',
-    confinementType: 'MCF',
+    confinementType: 'Tokamak',
     subsystems: initialSubsystems,
     financialParams: DEFAULT_FINANCIAL_PARAMS,
     lcoeBreakdown: initialBreakdown,
     feasibility: initialFeasibility,
     totalCapexAbs: initialCapexAbs,
     totalCapexPerKw: initialCapexPerKw,
-    solveMessage: null,
+    isTargetAttainable: initialBreakdown.totalLcoe <= 10 * 1.01,
+    minimumAttainableLcoe: initialBreakdown.totalLcoe,
 
     setTargetLcoe: (value) => {
-      set({ targetLcoe: value, solveMessage: null });
+      set({ targetLcoe: value });
       get().recalculate();
     },
 
     setFuelType: (fuelType) => {
       const { confinementType } = get();
-      const subsystems = applyConstraints(get().subsystems, fuelType, confinementType);
+      const subsystems = updateSubsystemStatus(get().subsystems, fuelType, confinementType);
       set({ fuelType, subsystems });
       get().recalculate();
     },
 
     setConfinementType: (confinementType) => {
       const { fuelType } = get();
-      const subsystems = applyConstraints(get().subsystems, fuelType, confinementType);
+      const subsystems = updateSubsystemStatus(get().subsystems, fuelType, confinementType);
       set({ confinementType, subsystems });
       get().recalculate();
     },
@@ -347,7 +358,7 @@ export const useFusionStore = create<FusionStore>((set, get) => {
 
     resetToDefaults: () => {
       const { fuelType, confinementType } = get();
-      const subsystems = applyConstraints(DEFAULT_SUBSYSTEMS, fuelType, confinementType);
+      const subsystems = updateSubsystemStatus(DEFAULT_SUBSYSTEMS, fuelType, confinementType);
       set({
         subsystems,
         financialParams: DEFAULT_FINANCIAL_PARAMS,
@@ -357,33 +368,146 @@ export const useFusionStore = create<FusionStore>((set, get) => {
 
     recalculate: () => {
       const { subsystems, financialParams, fuelType, confinementType, targetLcoe } = get();
-      const lcoeBreakdown = calculateLCOE(subsystems, financialParams, fuelType, confinementType);
+      const fuelInfo = FUEL_INFO[fuelType];
+      const doublings = Math.log2(Math.max(1, financialParams.unitsDeployed));
+
+      // Step 1: Calculate baseline LCOE (with multipliers but no learning)
+      const activeSubsystems = subsystems.filter(s => !s.disabled);
+
+      // Calculate baseline costs with multipliers
+      const baselineCosts = activeSubsystems.map(sub => {
+        const multiplier = getEffectiveMultiplier(sub.account, confinementType, fuelType);
+        return {
+          account: sub.account,
+          baselineCapex: sub.baselineCapitalCost * multiplier,
+          baselineOm: sub.baselineFixedOm * multiplier,
+          idiotIndex: sub.baselineIdiotIndex,
+          trl: sub.trl,
+        };
+      });
+
+      const totalBaselineCapex = baselineCosts.reduce((sum, s) => sum + s.baselineCapex, 0);
+      const totalBaselineOm = baselineCosts.reduce((sum, s) => sum + s.baselineOm, 0);
+      const totalVariableOm = activeSubsystems.reduce((sum, s) => sum + s.variableOm, 0);
+
+      // Calculate baseline LCOE
+      const effectiveCF = financialParams.capacityFactor * fuelInfo.cfModifier;
+      const crf = calculateCRF(financialParams.wacc, financialParams.lifetime);
+      const energyPerKw = (effectiveCF * 8760) / 1000;
+
+      const baselineCapexPerKw = (totalBaselineCapex * 1e6) / (financialParams.capacityMw * 1000) * fuelInfo.regulatoryModifier;
+      const baselineOmPerKw = (totalBaselineOm * 1e6) / (financialParams.capacityMw * 1000);
+      const baselineLcoe = (crf * baselineCapexPerKw + baselineOmPerKw) / energyPerKw + totalVariableOm;
+
+      // Step 2: Calculate required cost reduction to hit target
+      const reductionRatio = targetLcoe / baselineLcoe;
+
+      // Step 3: Distribute reduction across subsystems weighted by idiot index
+      const totalII = baselineCosts.reduce((sum, s) => sum + s.idiotIndex, 0);
+
+      // Step 4: Compute learning rates and costs for each subsystem
+      const subsystemsWithLR = subsystems.map(sub => {
+        if (sub.disabled) {
+          return {
+            ...sub,
+            learningRate: 1,
+            absoluteCapitalCost: 0,
+            absoluteFixedOm: 0,
+            lrOutOfRange: false,
+          };
+        }
+
+        const multiplier = getEffectiveMultiplier(sub.account, confinementType, fuelType);
+        const effectiveBaselineCapex = sub.baselineCapitalCost * multiplier;
+        const effectiveBaselineOm = sub.baselineFixedOm * multiplier;
+
+        let requiredLR = 1.0;
+        let targetCapex = effectiveBaselineCapex;
+        let targetOm = effectiveBaselineOm;
+
+        const plausibleRange = getPlausibleLRRange(sub.trl);
+
+        let unclampedLR = 1.0;
+
+        if (reductionRatio < 1 && doublings > 0 && totalII > 0) {
+          // Weight reduction by idiot index - higher II gets more aggressive learning
+          const iiWeight = sub.baselineIdiotIndex / totalII;
+          const avgReduction = 1 - reductionRatio;
+
+          // Subsystems with higher II get proportionally more reduction
+          const weightedReduction = avgReduction * (iiWeight * activeSubsystems.length);
+          const targetCostRatio = Math.max(0.01, 1 - weightedReduction);
+
+          // Compute required learning rate: LR = costRatio^(1/doublings)
+          unclampedLR = Math.pow(targetCostRatio, 1 / doublings);
+          // Clamp to TRL minimum floor (can't be more aggressive than plausible)
+          requiredLR = Math.max(plausibleRange.min, Math.min(1, unclampedLR));
+
+          // Compute actual costs with this learning rate
+          targetCapex = effectiveBaselineCapex * Math.pow(requiredLR, doublings);
+          targetOm = effectiveBaselineOm * Math.pow(requiredLR, doublings);
+        } else if (doublings <= 0) {
+          // N=1: no learning possible, costs stay at baseline
+          requiredLR = 1.0;
+          targetCapex = effectiveBaselineCapex;
+          targetOm = effectiveBaselineOm;
+        }
+
+        // Flag only if unclamped LR would be BELOW the floor (forced to clamp)
+        const lrOutOfRange = unclampedLR < plausibleRange.min;
+
+        return {
+          ...sub,
+          learningRate: requiredLR,
+          absoluteCapitalCost: Math.round(targetCapex),
+          absoluteFixedOm: Math.round(targetOm),
+          lrOutOfRange,
+        };
+      });
+
+      const lcoeBreakdown = calculateLCOE(subsystemsWithLR, financialParams, fuelType, confinementType);
       const feasibility = getFeasibilityStatus(lcoeBreakdown.totalLcoe, targetLcoe);
-      const totalCapexAbs = subsystems
+      const totalCapexAbs = subsystemsWithLR
         .filter(s => !s.disabled)
         .reduce((sum, s) => sum + s.absoluteCapitalCost, 0);
-      const totalCapexPerKw = subsystems
+      const totalCapexPerKw = subsystemsWithLR
         .filter(s => !s.disabled)
         .reduce((sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0);
-      set({ lcoeBreakdown, feasibility, totalCapexAbs, totalCapexPerKw });
-    },
 
-    applyTargetLcoe: () => {
-      const { targetLcoe, subsystems, financialParams, fuelType } = get();
-      const result = solveAndApplyTarget(targetLcoe, subsystems, financialParams, fuelType);
+      // Calculate minimum achievable LCOE using most aggressive plausible LRs (TRL min)
+      const minCostSubsystems = subsystems.map(sub => {
+        if (sub.disabled) {
+          return { ...sub, absoluteCapitalCost: 0, absoluteFixedOm: 0 };
+        }
+        const multiplier = getEffectiveMultiplier(sub.account, confinementType, fuelType);
+        const effectiveBaselineCapex = sub.baselineCapitalCost * multiplier;
+        const effectiveBaselineOm = sub.baselineFixedOm * multiplier;
 
-      if (result.success) {
-        set({ subsystems: result.subsystems, solveMessage: result.message });
-        get().recalculate();
-      } else {
-        set({ solveMessage: result.message });
-      }
+        // Use most aggressive plausible LR (TRL min)
+        const plausibleRange = getPlausibleLRRange(sub.trl);
+        const mostAggressiveLR = plausibleRange.min;
 
-      return { success: result.success, message: result.message };
-    },
+        // Apply learning curve with most aggressive LR
+        const minCapex = doublings > 0
+          ? effectiveBaselineCapex * Math.pow(mostAggressiveLR, doublings)
+          : effectiveBaselineCapex;
+        const minOm = doublings > 0
+          ? effectiveBaselineOm * Math.pow(mostAggressiveLR, doublings)
+          : effectiveBaselineOm;
 
-    clearSolveMessage: () => {
-      set({ solveMessage: null });
+        return { ...sub, absoluteCapitalCost: Math.round(minCapex), absoluteFixedOm: Math.round(minOm) };
+      });
+
+      const minLcoeBreakdown = calculateLCOE(minCostSubsystems, financialParams, fuelType, confinementType);
+      const minimumAttainableLcoe = minLcoeBreakdown.totalLcoe;
+
+      // Check if any subsystem has an out-of-range learning rate
+      const hasAnyOutOfRangeLR = subsystemsWithLR.some(s => !s.disabled && s.lrOutOfRange);
+
+      // Target is attainable if it's >= minimum achievable AND no subsystem has unrealistic LR
+      const isTargetAttainable = targetLcoe >= minimumAttainableLcoe * 0.99 && !hasAnyOutOfRangeLR;
+
+      set({ subsystems: subsystemsWithLR, lcoeBreakdown, feasibility, totalCapexAbs, totalCapexPerKw, isTargetAttainable, minimumAttainableLcoe });
     },
   };
 });
