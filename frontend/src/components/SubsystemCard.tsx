@@ -30,6 +30,11 @@ export function SubsystemCard({ subsystem }: SubsystemCardProps) {
 
   const trlColor = subsystem.trl >= 7 ? 'bg-green-500' : subsystem.trl >= 5 ? 'bg-yellow-500' : 'bg-red-500';
 
+  // OPEX as % of CAPEX
+  const opexPctOfCapex = subsystem.absoluteCapitalCost > 0
+    ? (subsystem.absoluteFixedOm / subsystem.absoluteCapitalCost) * 100
+    : 0;
+
   if (subsystem.disabled) {
     return (
       <div className="bg-gray-100 dark:bg-gray-700/50 rounded-lg p-4 opacity-60">
@@ -171,6 +176,9 @@ export function SubsystemCard({ subsystem }: SubsystemCardProps) {
             ${Math.round(fixedOmPerKw(subsystem.absoluteFixedOm, financialParams.capacityMw))}/kW-yr
           </div>
         </div>
+      </div>
+      <div className="text-xs text-green-600 dark:text-green-400 mt-2 text-center font-medium">
+        O&M: {opexPctOfCapex.toFixed(1)}% of CapEx
       </div>
 
       {subsystem.description && (

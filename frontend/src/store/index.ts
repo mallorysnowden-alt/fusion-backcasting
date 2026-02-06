@@ -402,8 +402,11 @@ export const useFusionStore = create<FusionStore>((set, get) => {
       // Step 2: Calculate required cost reduction to hit target
       const reductionRatio = targetLcoe / baselineLcoe;
 
-      // Step 3: Distribute reduction across subsystems weighted by idiot index
+      // Step 3: Distribute reduction/increase across subsystems
+      // For reductions (target < baseline): weight by idiot index (higher II = more reduction)
+      // For increases (target > baseline): weight by inverse TRL (lower TRL = more increase)
       const totalII = baselineCosts.reduce((sum, s) => sum + s.idiotIndex, 0);
+      const totalInverseTRL = baselineCosts.reduce((sum, s) => sum + (10 - s.trl), 0);
 
       // Step 4: Compute learning rates and costs for each subsystem
       const subsystemsWithLR = subsystems.map(sub => {
@@ -427,9 +430,8 @@ export const useFusionStore = create<FusionStore>((set, get) => {
 
         const plausibleRange = getPlausibleLRRange(sub.trl);
 
-        let unclampedLR = 1.0;
-
         if (reductionRatio < 1 && doublings > 0 && totalII > 0) {
+          // Target < baseline: need cost reductions via learning
           // Weight reduction by idiot index - higher II gets more aggressive learning
           const iiWeight = sub.baselineIdiotIndex / totalII;
           const avgReduction = 1 - reductionRatio;
@@ -439,8 +441,7 @@ export const useFusionStore = create<FusionStore>((set, get) => {
           const targetCostRatio = Math.max(0.01, 1 - weightedReduction);
 
           // Compute required learning rate: LR = costRatio^(1/doublings)
-          unclampedLR = Math.pow(targetCostRatio, 1 / doublings);
-          requiredLR = Math.min(1, unclampedLR);
+          requiredLR = Math.pow(targetCostRatio, 1 / doublings);
 
           // Clamp for cost calculation (can't be more aggressive than TRL min)
           const clampedLR = Math.max(plausibleRange.min, requiredLR);
@@ -448,6 +449,22 @@ export const useFusionStore = create<FusionStore>((set, get) => {
           // Compute actual costs with CLAMPED learning rate
           targetCapex = effectiveBaselineCapex * Math.pow(clampedLR, doublings);
           targetOm = effectiveBaselineOm * Math.pow(clampedLR, doublings);
+        } else if (reductionRatio > 1 && doublings > 0 && totalInverseTRL > 0) {
+          // Target > baseline: need cost increases ("anti-learning")
+          // Weight increases by inverse TRL - lower TRL gets more increase
+          const inverseTRLWeight = (10 - sub.trl) / totalInverseTRL;
+          const avgIncrease = reductionRatio - 1;
+
+          // Subsystems with lower TRL get proportionally more increase
+          const weightedIncrease = avgIncrease * (inverseTRLWeight * activeSubsystems.length);
+          const targetCostRatio = 1 + weightedIncrease;
+
+          // Compute required learning rate (will be > 1 for cost increases)
+          requiredLR = Math.pow(targetCostRatio, 1 / doublings);
+
+          // Apply costs directly (no clamping needed for increases)
+          targetCapex = effectiveBaselineCapex * Math.pow(requiredLR, doublings);
+          targetOm = effectiveBaselineOm * Math.pow(requiredLR, doublings);
         } else if (doublings <= 0) {
           // N=1: no learning possible, costs stay at baseline
           requiredLR = 1.0;
@@ -455,12 +472,12 @@ export const useFusionStore = create<FusionStore>((set, get) => {
           targetOm = effectiveBaselineOm;
         }
 
-        // Flag if required LR is more than 1 point below the TRL minimum
+        // Flag if required LR is more than 1 point below the TRL minimum (only for reductions)
         const lrOutOfRange = requiredLR < (plausibleRange.min - 0.01);
 
         return {
           ...sub,
-          learningRate: requiredLR,  // Display the UNCLAMPED/required LR
+          learningRate: requiredLR,  // Display the actual required LR (can be > 1)
           absoluteCapitalCost: Math.round(targetCapex),
           absoluteFixedOm: Math.round(targetOm),
           lrOutOfRange,
