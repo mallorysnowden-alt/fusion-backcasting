@@ -1,4 +1,5 @@
 import { useFusionStore } from '../store';
+import { calculatePowerBalance } from '../utils/calculations';
 
 // Logarithmic scale helpers for units deployed slider (2 to 10,000)
 const MIN_UNITS_LOG = Math.log10(2); // log10(2) ≈ 0.301
@@ -15,11 +16,50 @@ function sliderToUnits(sliderValue: number): number {
 export function FinancialPanel() {
   const { financialParams, updateFinancialParams } = useFusionStore();
 
+  const powerBalance = calculatePowerBalance(financialParams.capacityMw, financialParams.qEng);
+
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border dark:border-gray-700 p-4">
-      <h3 className="font-semibold text-gray-800 dark:text-gray-100 mb-4">Financial Parameters</h3>
+      <h3 className="font-semibold text-gray-800 dark:text-gray-100 mb-4">Technoeconomic Parameters</h3>
 
       <div className="space-y-4">
+        <SliderInput
+          label="Q_eng"
+          value={financialParams.qEng}
+          defaultValue={10}
+          min={1.5}
+          max={50}
+          step={0.5}
+          format={(v) => `${v.toFixed(1)}`}
+          formatDefault={(v) => `${v}`}
+          description="Net engineering energy gain (P_gross / P_recirc)"
+          onChange={(value) => updateFinancialParams({ qEng: value })}
+        />
+
+        {/* Power balance info box */}
+        <div className="bg-gray-50 dark:bg-gray-700/50 rounded-md px-3 py-2 text-xs text-gray-600 dark:text-gray-300 space-y-1">
+          <div className="flex justify-between">
+            <span>P_fus (thermal):</span>
+            <span className="font-medium">{Math.round(powerBalance.pFus).toLocaleString()} MW_th</span>
+          </div>
+          <div className="flex justify-between">
+            <span>P_net (sold):</span>
+            <span className="font-medium">{powerBalance.pNet.toLocaleString()} MW</span>
+          </div>
+          <div className="flex justify-between">
+            <span>P_gross:</span>
+            <span className="font-medium">{Math.round(powerBalance.pGross).toLocaleString()} MW</span>
+          </div>
+          <div className="flex justify-between">
+            <span>P_recirc:</span>
+            <span className="font-medium">{Math.round(powerBalance.pRecirc).toLocaleString()} MW</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Recirc. fraction:</span>
+            <span className="font-medium">{(powerBalance.fRecirc * 100).toFixed(1)}%</span>
+          </div>
+        </div>
+
         <SliderInput
           label="WACC"
           value={financialParams.wacc}
@@ -68,7 +108,7 @@ export function FinancialPanel() {
           step={100}
           format={(v) => `${v} MW`}
           formatDefault={(v) => `${v}MW`}
-          description="Nameplate electrical capacity"
+          description="Net electrical output (P_net)"
           onChange={(value) => updateFinancialParams({ capacityMw: value })}
         />
 
@@ -134,6 +174,10 @@ export function FinancialPanel() {
             <div>Wind/Solar: 5-7% WACC</div>
             <div>Nuclear CF: 85-93%</div>
             <div>Wind CF: 25-45%</div>
+            <div>ITER Q_eng: ~2-3</div>
+            <div>ARC/SPARC target: ~5-10</div>
+            <div>Commercial target: 10-25</div>
+            <div>Fission equiv.: ~40+</div>
           </div>
         </div>
       </div>

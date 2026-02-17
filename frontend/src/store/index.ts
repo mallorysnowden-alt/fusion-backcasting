@@ -12,6 +12,7 @@ import {
   capitalCostPerKw,
   getEffectiveMultiplier,
   getPlausibleLRRange,
+  getQEngMultiplier,
   FUEL_INFO,
 } from '../utils/calculations';
 
@@ -252,6 +253,7 @@ const DEFAULT_FINANCIAL_PARAMS: FinancialParams = {
   capacityMw: 1000,
   constructionTime: 5,
   unitsDeployed: 2,
+  qEng: 10,
 };
 
 interface FusionStore {
@@ -374,13 +376,14 @@ export const useFusionStore = create<FusionStore>((set, get) => {
       // Step 1: Calculate baseline LCOE (with multipliers but no learning)
       const activeSubsystems = subsystems.filter(s => !s.disabled);
 
-      // Calculate baseline costs with multipliers
+      // Calculate baseline costs with multipliers (including Q_eng scaling)
       const baselineCosts = activeSubsystems.map(sub => {
         const multiplier = getEffectiveMultiplier(sub.account, confinementType, fuelType);
+        const qMult = getQEngMultiplier(sub.account, financialParams.qEng);
         return {
           account: sub.account,
-          baselineCapex: sub.baselineCapitalCost * multiplier,
-          baselineOm: sub.baselineFixedOm * multiplier,
+          baselineCapex: sub.baselineCapitalCost * multiplier * qMult,
+          baselineOm: sub.baselineFixedOm * multiplier * qMult,
           idiotIndex: sub.baselineIdiotIndex,
           trl: sub.trl,
         };
@@ -421,8 +424,9 @@ export const useFusionStore = create<FusionStore>((set, get) => {
         }
 
         const multiplier = getEffectiveMultiplier(sub.account, confinementType, fuelType);
-        const effectiveBaselineCapex = sub.baselineCapitalCost * multiplier;
-        const effectiveBaselineOm = sub.baselineFixedOm * multiplier;
+        const qMult = getQEngMultiplier(sub.account, financialParams.qEng);
+        const effectiveBaselineCapex = sub.baselineCapitalCost * multiplier * qMult;
+        const effectiveBaselineOm = sub.baselineFixedOm * multiplier * qMult;
 
         let requiredLR = 1.0;
         let targetCapex = effectiveBaselineCapex;
@@ -497,8 +501,9 @@ export const useFusionStore = create<FusionStore>((set, get) => {
           return { ...sub, absoluteCapitalCost: 0, absoluteFixedOm: 0 };
         }
         const multiplier = getEffectiveMultiplier(sub.account, confinementType, fuelType);
-        const effectiveBaselineCapex = sub.baselineCapitalCost * multiplier;
-        const effectiveBaselineOm = sub.baselineFixedOm * multiplier;
+        const qMult = getQEngMultiplier(sub.account, financialParams.qEng);
+        const effectiveBaselineCapex = sub.baselineCapitalCost * multiplier * qMult;
+        const effectiveBaselineOm = sub.baselineFixedOm * multiplier * qMult;
 
         // Use most aggressive plausible LR (TRL min - no buffer for min achievable calc)
         const plausibleRange = getPlausibleLRRange(sub.trl);

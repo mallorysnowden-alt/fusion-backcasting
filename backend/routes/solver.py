@@ -21,6 +21,7 @@ from backend.services import (
     solve_for_wacc,
     solve_for_fixed_om,
     solve_for_lifetime,
+    solve_for_q_eng,
 )
 
 router = APIRouter(prefix="/api/solver", tags=["solver"])
@@ -96,7 +97,7 @@ def prepare_subsystems(
     return apply_constraints(subsystems, fuel_type, confinement_type)
 
 
-SolveParameter = Literal["capex", "capacity_factor", "wacc", "fixed_om", "lifetime"]
+SolveParameter = Literal["capex", "capacity_factor", "wacc", "fixed_om", "lifetime", "q_eng"]
 
 
 @router.post("/solve-for/{parameter}", response_model=SolverResponse)
@@ -123,6 +124,7 @@ async def solve_for_parameter(
         "wacc": solve_for_wacc,
         "fixed_om": solve_for_fixed_om,
         "lifetime": solve_for_lifetime,
+        "q_eng": solve_for_q_eng,
     }
 
     if parameter not in solvers:
@@ -158,6 +160,7 @@ async def solve_all(request: SolverRequest) -> dict:
         ("wacc", solve_for_wacc),
         ("fixed_om", solve_for_fixed_om),
         ("lifetime", solve_for_lifetime),
+        ("q_eng", solve_for_q_eng),
     ]:
         result = solver(
             target_lcoe=request.target_lcoe,

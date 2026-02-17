@@ -4,15 +4,17 @@ import {
   solveForCapex,
   solveForCapacityFactor,
   solveForWacc,
+  solveForQEng,
 } from '../utils/calculations';
 
-type SolverParam = 'capex' | 'capacity_factor' | 'wacc';
+type SolverParam = 'capex' | 'capacity_factor' | 'wacc' | 'q_eng';
 
 interface SolverResult {
   value: number;
   feasible: boolean;
   explanation: string;
   perKw?: number;
+  plantSizeFactor?: number;
 }
 
 export function SolveForButtons() {
@@ -21,6 +23,7 @@ export function SolveForButtons() {
     subsystems,
     financialParams,
     fuelType,
+    confinementType,
   } = useFusionStore();
 
   const [activeResult, setActiveResult] = useState<{ param: SolverParam; result: SolverResult } | null>(null);
@@ -29,6 +32,7 @@ export function SolveForButtons() {
     { param: 'capex', label: 'CapEx', icon: '$' },
     { param: 'capacity_factor', label: 'Capacity Factor', icon: '%' },
     { param: 'wacc', label: 'WACC', icon: 'r' },
+    { param: 'q_eng', label: 'Q_eng', icon: 'Q' },
   ];
 
   const handleSolve = (param: SolverParam) => {
@@ -44,6 +48,11 @@ export function SolveForButtons() {
       case 'wacc':
         result = solveForWacc(targetLcoe, subsystems, financialParams, fuelType);
         break;
+      case 'q_eng': {
+        const qResult = solveForQEng(targetLcoe, subsystems, financialParams, fuelType, confinementType);
+        result = { ...qResult };
+        break;
+      }
       default:
         return;
     }
@@ -135,6 +144,24 @@ export function SolveForButtons() {
                   <span className="font-semibold dark:text-gray-200">
                     {(activeResult.result.value * 100).toFixed(1)}%
                   </span>
+                </div>
+              )}
+              {activeResult.param === 'q_eng' && activeResult.result.value > 0 && activeResult.result.value < Infinity && (
+                <div className="mt-3 text-sm space-y-1">
+                  <div>
+                    <span className="text-gray-600 dark:text-gray-400">Required Q_eng:</span>{' '}
+                    <span className="font-semibold dark:text-gray-200">
+                      {activeResult.result.value.toFixed(1)}
+                    </span>
+                  </div>
+                  {activeResult.result.plantSizeFactor && (
+                    <div>
+                      <span className="text-gray-600 dark:text-gray-400">Plant size factor:</span>{' '}
+                      <span className="font-semibold dark:text-gray-200">
+                        {activeResult.result.plantSizeFactor.toFixed(2)}x
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -8,6 +8,7 @@ from .constraint_solver import (
     solve_for_wacc,
     solve_for_fixed_om,
     solve_for_lifetime,
+    solve_for_q_eng,
 )
 from .feasibility import analyze_feasibility, FeasibilityReport
 
@@ -21,6 +22,7 @@ __all__ = [
     "solve_for_wacc",
     "solve_for_fixed_om",
     "solve_for_lifetime",
+    "solve_for_q_eng",
     "analyze_feasibility",
     "FeasibilityReport",
 ]

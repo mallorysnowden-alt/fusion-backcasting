@@ -8,6 +8,7 @@ from backend.services.constraint_solver import (
     solve_for_wacc,
     solve_for_fixed_om,
     solve_for_lifetime,
+    solve_for_q_eng,
 )
 from backend.services.lcoe_calculator import calculate_lcoe
 
@@ -194,6 +195,49 @@ def test_solver_roundtrip_wacc():
         )
 
         # Calculate LCOE with solved WACC
+        lcoe_result = calculate_lcoe(subsystems, new_params, FuelType.DT)
+
+        # Should be close to target (within 5%)
+        assert abs(lcoe_result.total_lcoe - target) / target < 0.05
+
+
+def test_solve_for_q_eng_basic():
+    """Test solving for required Q_eng."""
+    subsystems = create_test_subsystems()
+    params = FinancialParams(capacity_mw=1000)
+
+    result = solve_for_q_eng(
+        target_lcoe=30.0,
+        subsystems=subsystems,
+        financial_params=params,
+        fuel_type=FuelType.DT,
+    )
+
+    assert result.parameter == "q_eng"
+    assert result.required_value > 0
+    assert isinstance(result.explanation, str)
+
+
+def test_solve_for_q_eng_roundtrip():
+    """Test that solved Q_eng value produces target LCOE when fed back."""
+    subsystems = create_test_subsystems()
+    params = FinancialParams(wacc=0.08, lifetime=40, capacity_factor=0.90, capacity_mw=1000, q_eng=10.0)
+    target = 30.0
+
+    # Solve for Q_eng
+    result = solve_for_q_eng(target, subsystems, params, FuelType.DT)
+
+    if result.feasible and 1.5 <= result.required_value <= 50:
+        # Use solved Q_eng
+        new_params = FinancialParams(
+            wacc=params.wacc,
+            lifetime=params.lifetime,
+            capacity_factor=params.capacity_factor,
+            capacity_mw=params.capacity_mw,
+            q_eng=result.required_value,
+        )
+
+        # Calculate LCOE with solved Q_eng
         lcoe_result = calculate_lcoe(subsystems, new_params, FuelType.DT)
 
         # Should be close to target (within 5%)

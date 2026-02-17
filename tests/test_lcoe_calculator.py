@@ -2,7 +2,7 @@
 
 import pytest
 from backend.models import Subsystem, FinancialParams, FuelType
-from backend.services.lcoe_calculator import calculate_crf, calculate_lcoe, get_feasibility_status
+from backend.services.lcoe_calculator import calculate_crf, calculate_lcoe, get_feasibility_status, q_eng_multiplier
 
 
 def test_calculate_crf_typical_values():
@@ -197,3 +197,89 @@ def test_lcoe_changes_with_plant_capacity():
 
     # Smaller plant should have higher LCOE (same cost spread over less capacity)
     assert result_small.total_lcoe > result_large.total_lcoe
+
+
+def test_q_eng_multiplier_scaling():
+    """Test Q_eng multiplier math: Q/(Q-1) for reactor accounts, 1.0 for BOP."""
+    # Q=5: multiplier should be 5/4 = 1.25
+    assert q_eng_multiplier("22.1.1", 5.0) == pytest.approx(5.0 / 4.0)
+    assert q_eng_multiplier("22.1.3", 5.0) == pytest.approx(5.0 / 4.0)
+    assert q_eng_multiplier("23", 5.0) == pytest.approx(5.0 / 4.0)
+
+    # BOP should always be 1.0
+    assert q_eng_multiplier("24-26", 5.0) == 1.0
+    assert q_eng_multiplier("24-26", 2.0) == 1.0
+    assert q_eng_multiplier("24-26", 50.0) == 1.0
+
+
+def test_q_eng_multiplier_high_q():
+    """Test that high Q_eng gives multiplier close to 1.0."""
+    mult = q_eng_multiplier("22.1.1", 50.0)
+    assert mult == pytest.approx(50.0 / 49.0, rel=0.001)
+    assert mult < 1.03  # Less than 3% overhead
+
+
+def test_lcoe_increases_with_lower_q_eng():
+    """Test that LCOE increases when Q_eng decreases (more recirculating power)."""
+    subsystems = create_test_subsystems()
+
+    params_high_q = FinancialParams(capacity_mw=1000, q_eng=20.0)
+    params_low_q = FinancialParams(capacity_mw=1000, q_eng=3.0)
+
+    result_high = calculate_lcoe(subsystems, params_high_q, FuelType.DT)
+    result_low = calculate_lcoe(subsystems, params_low_q, FuelType.DT)
+
+    assert result_low.total_lcoe > result_high.total_lcoe
+
+
+def test_bop_unaffected_by_q_eng():
+    """Test that BOP (24-26) subsystem cost is not affected by Q_eng."""
+    bop_only = [
+        Subsystem(
+            account="24-26",
+            name="BOP",
+            absolute_capital_cost=350,
+            absolute_fixed_om=10,
+            variable_om=0.3,
+            trl=9,
+            idiot_index=1.5,
+        ),
+    ]
+
+    params_low_q = FinancialParams(capacity_mw=1000, q_eng=2.0)
+    params_high_q = FinancialParams(capacity_mw=1000, q_eng=50.0)
+
+    result_low = calculate_lcoe(bop_only, params_low_q, FuelType.DT)
+    result_high = calculate_lcoe(bop_only, params_high_q, FuelType.DT)
+
+    # BOP LCOE should be identical regardless of Q_eng
+    assert result_low.total_lcoe == pytest.approx(result_high.total_lcoe, rel=0.001)
+
+
+def test_q_eng_scaling_factor_cross_check():
+    """Cross-check: at Q=5, reactor costs should be ~25% higher than at Q=50."""
+    # Q=5: factor = 5/4 = 1.25
+    # Q=50: factor = 50/49 ≈ 1.0204
+    # Ratio ≈ 1.25/1.0204 ≈ 1.225
+    reactor = [
+        Subsystem(
+            account="22.1.3",
+            name="Magnets",
+            absolute_capital_cost=800,
+            absolute_fixed_om=20,
+            variable_om=0,
+            trl=6,
+            idiot_index=12.0,
+        ),
+    ]
+
+    params_q5 = FinancialParams(capacity_mw=1000, q_eng=5.0)
+    params_q50 = FinancialParams(capacity_mw=1000, q_eng=50.0)
+
+    result_q5 = calculate_lcoe(reactor, params_q5, FuelType.DT)
+    result_q50 = calculate_lcoe(reactor, params_q50, FuelType.DT)
+
+    # Capital contribution ratio should be close to (5/4)/(50/49) ≈ 1.225
+    ratio = result_q5.capital_contribution / result_q50.capital_contribution
+    expected_ratio = (5.0 / 4.0) / (50.0 / 49.0)
+    assert ratio == pytest.approx(expected_ratio, rel=0.01)

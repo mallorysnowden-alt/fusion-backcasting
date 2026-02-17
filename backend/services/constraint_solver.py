@@ -8,7 +8,7 @@ from backend.models import (
     get_fuel_constraints,
     ConfinementType,
 )
-from backend.services.lcoe_calculator import calculate_crf
+from backend.services.lcoe_calculator import calculate_crf, q_eng_multiplier
 
 
 class SolverResult:
@@ -53,22 +53,25 @@ def solve_for_capex(
     crf = calculate_crf(financial_params.wacc, financial_params.lifetime)
     energy_per_kw = effective_cf * 8760 / 1000  # MWh per kW per year
 
-    # Sum O&M from active subsystems (converted to $/kW)
+    # Sum O&M from active subsystems (converted to $/kW, with Q_eng scaling)
     total_fixed_om = sum(
-        s.fixed_om_per_kw(financial_params.capacity_mw)
+        s.fixed_om_per_kw(financial_params.capacity_mw) * q_eng_multiplier(s.account, financial_params.q_eng)
         for s in subsystems if not s.disabled
     )
     total_variable_om = sum(s.variable_om for s in subsystems if not s.disabled)
 
-    # Current capex for reference ($/kW)
+    # Current capex for reference ($/kW, with Q_eng scaling)
     current_capex_per_kw = sum(
-        s.capital_cost_per_kw(financial_params.capacity_mw)
+        s.capital_cost_per_kw(financial_params.capacity_mw) * q_eng_multiplier(s.account, financial_params.q_eng)
         for s in subsystems if not s.disabled
     )
     current_capex_per_kw *= fuel_constraints.regulatory_modifier
 
-    # Current absolute capex ($M)
-    current_capex_abs = sum(s.absolute_capital_cost for s in subsystems if not s.disabled)
+    # Current absolute capex ($M, with Q_eng scaling)
+    current_capex_abs = sum(
+        s.absolute_capital_cost * q_eng_multiplier(s.account, financial_params.q_eng)
+        for s in subsystems if not s.disabled
+    )
 
     # Solve for capex ($/kW)
     max_capex_with_reg = (
@@ -116,14 +119,14 @@ def solve_for_capacity_factor(
     fuel_constraints = get_fuel_constraints(fuel_type)
     crf = calculate_crf(financial_params.wacc, financial_params.lifetime)
 
-    # Sum costs from active subsystems (converted to $/kW)
+    # Sum costs from active subsystems (converted to $/kW, with Q_eng scaling)
     total_capex = sum(
-        s.capital_cost_per_kw(financial_params.capacity_mw)
+        s.capital_cost_per_kw(financial_params.capacity_mw) * q_eng_multiplier(s.account, financial_params.q_eng)
         for s in subsystems if not s.disabled
     )
     total_capex *= fuel_constraints.regulatory_modifier
     total_fixed_om = sum(
-        s.fixed_om_per_kw(financial_params.capacity_mw)
+        s.fixed_om_per_kw(financial_params.capacity_mw) * q_eng_multiplier(s.account, financial_params.q_eng)
         for s in subsystems if not s.disabled
     )
     total_variable_om = sum(s.variable_om for s in subsystems if not s.disabled)
@@ -177,14 +180,14 @@ def solve_for_wacc(
     effective_cf = financial_params.capacity_factor * fuel_constraints.cf_modifier
     energy_per_kw = effective_cf * 8760 / 1000
 
-    # Sum costs from active subsystems (converted to $/kW)
+    # Sum costs from active subsystems (converted to $/kW, with Q_eng scaling)
     total_capex = sum(
-        s.capital_cost_per_kw(financial_params.capacity_mw)
+        s.capital_cost_per_kw(financial_params.capacity_mw) * q_eng_multiplier(s.account, financial_params.q_eng)
         for s in subsystems if not s.disabled
     )
     total_capex *= fuel_constraints.regulatory_modifier
     total_fixed_om = sum(
-        s.fixed_om_per_kw(financial_params.capacity_mw)
+        s.fixed_om_per_kw(financial_params.capacity_mw) * q_eng_multiplier(s.account, financial_params.q_eng)
         for s in subsystems if not s.disabled
     )
     total_variable_om = sum(s.variable_om for s in subsystems if not s.disabled)
@@ -260,17 +263,20 @@ def solve_for_fixed_om(
     crf = calculate_crf(financial_params.wacc, financial_params.lifetime)
     energy_per_kw = effective_cf * 8760 / 1000
 
-    # Sum costs from active subsystems (converted to $/kW)
+    # Sum costs from active subsystems (converted to $/kW, with Q_eng scaling)
     total_capex = sum(
-        s.capital_cost_per_kw(financial_params.capacity_mw)
+        s.capital_cost_per_kw(financial_params.capacity_mw) * q_eng_multiplier(s.account, financial_params.q_eng)
         for s in subsystems if not s.disabled
     )
     total_capex *= fuel_constraints.regulatory_modifier
     current_fixed_om_per_kw = sum(
-        s.fixed_om_per_kw(financial_params.capacity_mw)
+        s.fixed_om_per_kw(financial_params.capacity_mw) * q_eng_multiplier(s.account, financial_params.q_eng)
         for s in subsystems if not s.disabled
     )
-    current_fixed_om_abs = sum(s.absolute_fixed_om for s in subsystems if not s.disabled)
+    current_fixed_om_abs = sum(
+        s.absolute_fixed_om * q_eng_multiplier(s.account, financial_params.q_eng)
+        for s in subsystems if not s.disabled
+    )
     total_variable_om = sum(s.variable_om for s in subsystems if not s.disabled)
 
     # Solve for fixed O&M ($/kW-yr)
@@ -315,14 +321,14 @@ def solve_for_lifetime(
     effective_cf = financial_params.capacity_factor * fuel_constraints.cf_modifier
     energy_per_kw = effective_cf * 8760 / 1000
 
-    # Sum costs from active subsystems (converted to $/kW)
+    # Sum costs from active subsystems (converted to $/kW, with Q_eng scaling)
     total_capex = sum(
-        s.capital_cost_per_kw(financial_params.capacity_mw)
+        s.capital_cost_per_kw(financial_params.capacity_mw) * q_eng_multiplier(s.account, financial_params.q_eng)
         for s in subsystems if not s.disabled
     )
     total_capex *= fuel_constraints.regulatory_modifier
     total_fixed_om = sum(
-        s.fixed_om_per_kw(financial_params.capacity_mw)
+        s.fixed_om_per_kw(financial_params.capacity_mw) * q_eng_multiplier(s.account, financial_params.q_eng)
         for s in subsystems if not s.disabled
     )
     total_variable_om = sum(s.variable_om for s in subsystems if not s.disabled)
@@ -380,4 +386,102 @@ def solve_for_lifetime(
         feasible=feasible,
         explanation=explanation,
         constraints={"current_lifetime": financial_params.lifetime},
+    )
+
+
+def solve_for_q_eng(
+    target_lcoe: float,
+    subsystems: list[Subsystem],
+    financial_params: FinancialParams,
+    fuel_type: FuelType = FuelType.DT,
+) -> SolverResult:
+    """
+    Solve for required Q_eng to hit target LCOE.
+
+    Separates costs into Q-scaling (reactor island, turbine) and non-Q-scaling (BOP).
+    Q/(Q-1) = (A - C_nq) / C_q  where A = LCOE headroom, C_q/C_nq = Q/non-Q cost rates.
+    Then Q = R / (R - 1) where R = (A - C_nq) / C_q.
+    """
+    from backend.services.lcoe_calculator import Q_SCALING_FACTORS
+
+    fuel_constraints = get_fuel_constraints(fuel_type)
+    effective_cf = financial_params.capacity_factor * fuel_constraints.cf_modifier
+    crf = calculate_crf(financial_params.wacc, financial_params.lifetime)
+    energy_per_kw = effective_cf * 8760 / 1000
+
+    active = [s for s in subsystems if not s.disabled]
+    total_variable_om = sum(s.variable_om for s in active)
+
+    # Separate Q-scaling and non-Q-scaling costs
+    capex_q = 0.0
+    capex_no_q = 0.0
+    om_q = 0.0
+    om_no_q = 0.0
+
+    for s in active:
+        cap_kw = s.capital_cost_per_kw(financial_params.capacity_mw)
+        om_kw = s.fixed_om_per_kw(financial_params.capacity_mw)
+        scaling_flag = Q_SCALING_FACTORS.get(s.account, 0.0)
+        if scaling_flag > 0:
+            capex_q += cap_kw
+            om_q += om_kw
+        else:
+            capex_no_q += cap_kw
+            om_no_q += om_kw
+
+    c_q = crf * capex_q * fuel_constraints.regulatory_modifier + om_q
+    c_nq = crf * capex_no_q * fuel_constraints.regulatory_modifier + om_no_q
+    a = (target_lcoe - total_variable_om) * energy_per_kw
+
+    if a <= c_nq:
+        return SolverResult(
+            parameter="q_eng",
+            required_value=float("inf"),
+            feasible=False,
+            explanation=f"Impossible: non-Q costs alone exceed target ${target_lcoe}/MWh",
+        )
+
+    if c_q <= 0:
+        return SolverResult(
+            parameter="q_eng",
+            required_value=1.5,
+            feasible=True,
+            explanation="No Q-scaling costs active — any Q_eng achieves target",
+        )
+
+    r = (a - c_nq) / c_q  # R = Q/(Q-1)
+
+    if r <= 1:
+        return SolverResult(
+            parameter="q_eng",
+            required_value=float("inf"),
+            feasible=False,
+            explanation=f"Impossible: Q-scaling costs too high for target ${target_lcoe}/MWh",
+        )
+
+    required_q = r / (r - 1)
+    feasible = 1.5 <= required_q <= 50
+
+    if required_q < 1.5:
+        explanation = f"Need Q_eng = {required_q:.1f} (below physical minimum ~1.5)"
+    elif required_q > 50:
+        explanation = f"Need Q_eng > 50 — easily achievable"
+    elif required_q > 20:
+        explanation = f"Need Q_eng >= {required_q:.1f} (achievable for mature designs)"
+    elif required_q > 5:
+        explanation = f"Need Q_eng >= {required_q:.1f} ({100/required_q:.0f}% recirculated)"
+    else:
+        explanation = f"Need Q_eng >= {required_q:.1f} (high recirculating power, {100/required_q:.0f}% recirculated)"
+
+    plant_size_factor = required_q / (required_q - 1)
+
+    return SolverResult(
+        parameter="q_eng",
+        required_value=round(required_q, 1),
+        feasible=feasible,
+        explanation=explanation,
+        constraints={
+            "current_q_eng": financial_params.q_eng,
+            "plant_size_factor": round(plant_size_factor, 2),
+        },
     )

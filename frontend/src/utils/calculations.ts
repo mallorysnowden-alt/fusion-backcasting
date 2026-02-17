@@ -266,6 +266,71 @@ export interface FinancialParams {
   capacityMw: number;
   constructionTime: number;
   unitsDeployed: number;  // Global N for fleet deployment
+  qEng: number;           // Engineering energy gain Q_eng = P_gross / P_recirc
+}
+
+/**
+ * Q_eng scaling factors per account.
+ * 1.0 = scales with plant size (reactor island, turbine)
+ * 0.0 = does not scale (balance of plant, grid-side infrastructure)
+ */
+export const Q_SCALING_FACTORS: Record<string, number> = {
+  '22.1.1': 1.0,   // First Wall/Blanket
+  '22.1.2': 1.0,   // Neutron Shielding
+  '22.1.3': 1.0,   // Magnets
+  '22.1.5': 1.0,   // Structural Support
+  '22.1.6': 1.0,   // Vacuum Systems
+  '22.1.7': 1.0,   // Power Supplies
+  '22.1.8': 1.0,   // Laser/Driver
+  '22.1.8b': 1.0,  // Implosion Drivers
+  '22.1.9': 1.0,   // Direct Energy Conversion
+  '22.5': 1.0,     // Tritium Handling
+  '22.6': 1.0,     // He3 Production
+  '23': 1.0,       // Turbine Plant
+  '24-26': 0.0,    // Balance of Plant (no Q scaling)
+};
+
+/**
+ * Plant size factor: how much larger the plant must be to deliver P_net
+ * given recirculating power fraction 1/Q_eng.
+ * P_gross = P_net × Q/(Q-1)
+ */
+export function qEngPlantSizeFactor(qEng: number): number {
+  if (qEng <= 1) return Infinity;
+  return qEng / (qEng - 1);
+}
+
+/**
+ * Get Q_eng cost multiplier for a specific subsystem account.
+ * Reactor-island accounts scale by Q/(Q-1), BOP stays at 1.0.
+ */
+export function getQEngMultiplier(account: string, qEng: number): number {
+  if (qEng <= 1) return Infinity;
+  const scalingFlag = Q_SCALING_FACTORS[account];
+  if (scalingFlag === undefined || scalingFlag === 0) return 1.0;
+  return qEngPlantSizeFactor(qEng);
+}
+
+/**
+ * Calculate power balance from net capacity and Q_eng.
+ */
+export function calculatePowerBalance(capacityMw: number, qEng: number): {
+  pNet: number;
+  pGross: number;
+  pRecirc: number;
+  fRecirc: number;
+  pFus: number;
+} {
+  const etaTh = 0.33; // Typical thermal-to-electric efficiency
+  if (qEng <= 1) {
+    return { pNet: capacityMw, pGross: Infinity, pRecirc: Infinity, fRecirc: 1, pFus: Infinity };
+  }
+  const pNet = capacityMw;
+  const pGross = pNet * qEng / (qEng - 1);
+  const pRecirc = pNet / (qEng - 1);
+  const fRecirc = 1 / qEng;
+  const pFus = pGross / etaTh;
+  return { pNet, pGross, pRecirc, fRecirc, pFus };
 }
 
 export type FuelType = 'D-T' | 'D-He3' | 'p-B11';
@@ -442,11 +507,14 @@ export function calculateLCOE(
     // Skip if multiplier is 0 (subsystem not used for this configuration)
     if (multiplier === 0) continue;
 
+    // Q_eng multiplier: reactor-island costs scale by Q/(Q-1)
+    const qMult = getQEngMultiplier(sub.account, financialParams.qEng);
+
     // Apply multiplier to baseline costs, then use user-adjusted ratio
     // effectiveCost = baselineCost * multiplier * (currentCost / baselineCost)
     //               = currentCost * multiplier
-    const effectiveCapitalCost = sub.absoluteCapitalCost * multiplier;
-    const effectiveFixedOm = sub.absoluteFixedOm * multiplier;
+    const effectiveCapitalCost = sub.absoluteCapitalCost * multiplier * qMult;
+    const effectiveFixedOm = sub.absoluteFixedOm * multiplier * qMult;
 
     // Convert absolute costs to $/kW
     const capPerKw = capitalCostPerKw(effectiveCapitalCost, financialParams.capacityMw);
@@ -548,9 +616,9 @@ export function solveForCapex(
 
   const totalFixedOm = subsystems
     .filter(s => !s.disabled)
-    .reduce((sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0);
+    .reduce((sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm * getQEngMultiplier(s.account, financialParams.qEng), financialParams.capacityMw), 0);
   const totalVariableOm = subsystems.filter(s => !s.disabled).reduce((sum, s) => sum + s.variableOm, 0);
-  const currentCapexAbs = subsystems.filter(s => !s.disabled).reduce((sum, s) => sum + s.absoluteCapitalCost, 0);
+  const currentCapexAbs = subsystems.filter(s => !s.disabled).reduce((sum, s) => sum + s.absoluteCapitalCost * getQEngMultiplier(s.account, financialParams.qEng), 0);
 
   const maxCapexWithReg = ((targetLcoe - totalVariableOm) * energyPerKw - totalFixedOm) / crf;
   const maxCapexPerKw = maxCapexWithReg / fuelInfo.regulatoryModifier;
@@ -584,11 +652,11 @@ export function solveForCapacityFactor(
 
   const totalCapex = subsystems
     .filter(s => !s.disabled)
-    .reduce((sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0)
+    .reduce((sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost * getQEngMultiplier(s.account, financialParams.qEng), financialParams.capacityMw), 0)
     * fuelInfo.regulatoryModifier;
   const totalFixedOm = subsystems
     .filter(s => !s.disabled)
-    .reduce((sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0);
+    .reduce((sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm * getQEngMultiplier(s.account, financialParams.qEng), financialParams.capacityMw), 0);
   const totalVariableOm = subsystems.filter(s => !s.disabled).reduce((sum, s) => sum + s.variableOm, 0);
 
   const denominator = (targetLcoe - totalVariableOm) * 8760 / 1000;
@@ -634,11 +702,11 @@ export function solveForWacc(
 
   const totalCapex = subsystems
     .filter(s => !s.disabled)
-    .reduce((sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0)
+    .reduce((sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost * getQEngMultiplier(s.account, financialParams.qEng), financialParams.capacityMw), 0)
     * fuelInfo.regulatoryModifier;
   const totalFixedOm = subsystems
     .filter(s => !s.disabled)
-    .reduce((sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0);
+    .reduce((sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm * getQEngMultiplier(s.account, financialParams.qEng), financialParams.capacityMw), 0);
   const totalVariableOm = subsystems.filter(s => !s.disabled).reduce((sum, s) => sum + s.variableOm, 0);
 
   const lcoeAtWacc = (wacc: number): number => {
@@ -729,12 +797,12 @@ export function solveAndApplyTarget(
   // Get active subsystems
   const activeSubsystems = subsystems.filter(s => !s.disabled);
 
-  // Calculate current costs (using current learning rates)
+  // Calculate current costs (using current learning rates, with Q_eng scaling)
   const currentCapexPerKw = activeSubsystems.reduce(
-    (sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0
+    (sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost * getQEngMultiplier(s.account, financialParams.qEng), financialParams.capacityMw), 0
   ) * fuelInfo.regulatoryModifier;
   const currentOmPerKw = activeSubsystems.reduce(
-    (sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0
+    (sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm * getQEngMultiplier(s.account, financialParams.qEng), financialParams.capacityMw), 0
   );
   const totalVariableOm = activeSubsystems.reduce((sum, s) => sum + s.variableOm, 0);
 
@@ -820,10 +888,10 @@ export function solveAndApplyTarget(
   // Calculate new LCOE
   const activeUpdated = updatedSubsystems.filter(s => !s.disabled);
   const newCapexPerKw = activeUpdated.reduce(
-    (sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost, financialParams.capacityMw), 0
+    (sum, s) => sum + capitalCostPerKw(s.absoluteCapitalCost * getQEngMultiplier(s.account, financialParams.qEng), financialParams.capacityMw), 0
   ) * fuelInfo.regulatoryModifier;
   const newOmPerKw = activeUpdated.reduce(
-    (sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm, financialParams.capacityMw), 0
+    (sum, s) => sum + fixedOmPerKw(s.absoluteFixedOm * getQEngMultiplier(s.account, financialParams.qEng), financialParams.capacityMw), 0
   );
   const newLcoe = (crf * newCapexPerKw + newOmPerKw) / energyPerKw + totalVariableOm;
 
@@ -853,6 +921,112 @@ export function solveAndApplyTarget(
     success: true,
     message: `Target achieved!${lockedNote} CapEx reduced by $${Math.round(capexReduction)}M to $${Math.round(newCapexTotal)}M. LCOE: $${newLcoe.toFixed(2)}/MWh${lrWarning}`,
     implausibleLRCount,
+  };
+}
+
+/**
+ * Solve for required Q_eng to hit target LCOE.
+ * Separates costs into Q-scaling (reactor island, turbine) and non-Q-scaling (BOP).
+ *
+ * LCOE = (CRF × (Capex_Q × Q/(Q-1) + Capex_noQ) × reg + (OM_Q × Q/(Q-1) + OM_noQ)) / E + VarOM
+ * Let A = target LCOE headroom = (targetLcoe - VarOM) × E
+ * Let C_q = CRF × Capex_Q × reg + OM_Q  (Q-scaling cost rate, before Q factor)
+ * Let C_nq = CRF × Capex_noQ × reg + OM_noQ  (non-Q-scaling cost rate)
+ * Then: A = C_q × Q/(Q-1) + C_nq
+ * Solving: Q/(Q-1) = (A - C_nq) / C_q
+ * Let R = (A - C_nq) / C_q, then Q = R / (R - 1)
+ */
+export function solveForQEng(
+  targetLcoe: number,
+  subsystems: Subsystem[],
+  financialParams: FinancialParams,
+  fuelType: FuelType,
+  confinementType: ConfinementType
+): { value: number; feasible: boolean; explanation: string; plantSizeFactor: number } {
+  const fuelInfo = FUEL_INFO[fuelType];
+  const effectiveCF = financialParams.capacityFactor * fuelInfo.cfModifier;
+  const crf = calculateCRF(financialParams.wacc, financialParams.lifetime);
+  const energyPerKw = (effectiveCF * 8760) / 1000;
+
+  const active = subsystems.filter(s => !s.disabled);
+  const totalVariableOm = active.reduce((sum, s) => sum + s.variableOm, 0);
+
+  // Separate Q-scaling and non-Q-scaling costs
+  let capexQ = 0;
+  let capexNoQ = 0;
+  let omQ = 0;
+  let omNoQ = 0;
+
+  for (const s of active) {
+    const mult = getEffectiveMultiplier(s.account, confinementType, fuelType);
+    if (mult === 0) continue;
+    const capPerKw = capitalCostPerKw(s.absoluteCapitalCost * mult, financialParams.capacityMw);
+    const omPKw = fixedOmPerKw(s.absoluteFixedOm * mult, financialParams.capacityMw);
+    const scalingFlag = Q_SCALING_FACTORS[s.account];
+    if (scalingFlag !== undefined && scalingFlag > 0) {
+      capexQ += capPerKw;
+      omQ += omPKw;
+    } else {
+      capexNoQ += capPerKw;
+      omNoQ += omPKw;
+    }
+  }
+
+  const cQ = crf * capexQ * fuelInfo.regulatoryModifier + omQ;
+  const cNQ = crf * capexNoQ * fuelInfo.regulatoryModifier + omNoQ;
+  const A = (targetLcoe - totalVariableOm) * energyPerKw;
+
+  if (A <= cNQ) {
+    return {
+      value: Infinity,
+      feasible: false,
+      explanation: `Impossible: even with infinite Q_eng, non-Q costs ($${(cNQ / energyPerKw + totalVariableOm).toFixed(1)}/MWh) exceed target`,
+      plantSizeFactor: Infinity,
+    };
+  }
+
+  if (cQ <= 0) {
+    return {
+      value: 1.5,
+      feasible: true,
+      explanation: `No Q-scaling costs active — any Q_eng achieves target`,
+      plantSizeFactor: 1,
+    };
+  }
+
+  const R = (A - cNQ) / cQ; // R = Q/(Q-1)
+
+  if (R <= 1) {
+    return {
+      value: Infinity,
+      feasible: false,
+      explanation: `Impossible: Q-scaling costs too high for target $${targetLcoe}/MWh`,
+      plantSizeFactor: Infinity,
+    };
+  }
+
+  const requiredQ = R / (R - 1);
+  const psf = qEngPlantSizeFactor(requiredQ);
+  const feasible = requiredQ >= 1.5 && requiredQ <= 50;
+
+  let explanation: string;
+  if (requiredQ < 1.5) {
+    explanation = `Need Q_eng = ${requiredQ.toFixed(1)} (below physical minimum ~1.5)`;
+  } else if (requiredQ > 50) {
+    explanation = `Need Q_eng > 50 — easily achievable, Q barely affects LCOE at this level`;
+  } else if (requiredQ > 20) {
+    explanation = `Need Q_eng >= ${requiredQ.toFixed(1)} (achievable for mature designs)`;
+  } else if (requiredQ > 5) {
+    explanation = `Need Q_eng >= ${requiredQ.toFixed(1)} (moderate recirculating power, ${(100/requiredQ).toFixed(0)}% recirculated)`;
+  } else {
+    explanation = `Need Q_eng >= ${requiredQ.toFixed(1)} (high recirculating power, ${(100/requiredQ).toFixed(0)}% recirculated)`;
+  }
+
+  return {
+    value: Math.round(requiredQ * 10) / 10,
+    feasible,
+    explanation,
+    plantSizeFactor: Math.round(psf * 100) / 100,
   };
 }
 

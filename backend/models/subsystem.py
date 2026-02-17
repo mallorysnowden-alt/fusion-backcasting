@@ -97,6 +97,12 @@ class FinancialParams(BaseModel):
         le=15,
         description="Construction time in years"
     )
+    q_eng: float = Field(
+        default=10.0,
+        gt=1.0,
+        le=50.0,
+        description="Engineering energy gain Q_eng = P_gross / P_recirc"
+    )
 
 
 class LCOEBreakdown(BaseModel):

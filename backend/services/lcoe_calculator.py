@@ -11,6 +11,39 @@ from backend.models import (
 )
 
 
+# Q_eng scaling factors per account
+# 1.0 = scales with plant size (reactor island, turbine)
+# 0.0 = does not scale (balance of plant, grid-side infrastructure)
+Q_SCALING_FACTORS: dict[str, float] = {
+    "22.1.1": 1.0,   # First Wall/Blanket
+    "22.1.2": 1.0,   # Neutron Shielding
+    "22.1.3": 1.0,   # Magnets
+    "22.1.5": 1.0,   # Structural Support
+    "22.1.6": 1.0,   # Vacuum Systems
+    "22.1.7": 1.0,   # Power Supplies
+    "22.1.8": 1.0,   # Laser/Driver
+    "22.1.8b": 1.0,  # Implosion Drivers
+    "22.1.9": 1.0,   # Direct Energy Conversion
+    "22.5": 1.0,     # Tritium Handling
+    "22.6": 1.0,     # He3 Production
+    "23": 1.0,       # Turbine Plant
+    "24-26": 0.0,    # Balance of Plant (no Q scaling)
+}
+
+
+def q_eng_multiplier(account: str, q_eng: float) -> float:
+    """Get Q_eng cost multiplier for a subsystem account.
+
+    Reactor-island accounts scale by Q/(Q-1), BOP stays at 1.0.
+    """
+    if q_eng <= 1:
+        return float("inf")
+    scaling_flag = Q_SCALING_FACTORS.get(account, 0.0)
+    if scaling_flag == 0:
+        return 1.0
+    return q_eng / (q_eng - 1)
+
+
 def calculate_crf(wacc: float, lifetime: int) -> float:
     """
     Calculate Capital Recovery Factor.
@@ -81,9 +114,12 @@ def calculate_lcoe(
         if sub.disabled:
             continue
 
-        # Convert absolute costs to $/kW
-        capital_per_kw = sub.capital_cost_per_kw(financial_params.capacity_mw)
-        fixed_om_per_kw = sub.fixed_om_per_kw(financial_params.capacity_mw)
+        # Q_eng multiplier: reactor-island costs scale by Q/(Q-1)
+        q_mult = q_eng_multiplier(sub.account, financial_params.q_eng)
+
+        # Convert absolute costs to $/kW (with Q scaling)
+        capital_per_kw = sub.capital_cost_per_kw(financial_params.capacity_mw) * q_mult
+        fixed_om_per_kw = sub.fixed_om_per_kw(financial_params.capacity_mw) * q_mult
 
         total_capex += capital_per_kw
         total_fixed_om += fixed_om_per_kw
